@@ -1,10 +1,13 @@
+import importlib
+from typing import List
+from typing import NamedTuple
+
 import numpy as np
 from cvxpy import *
-from typing import NamedTuple, Iterable
 
-from InferenceGraph import TGraphVX
 import InferenceGraph
-import importlib
+from InferenceGraph import TGraphVX
+
 
 class PenaltyType(NamedTuple):
     L1 = 1
@@ -20,21 +23,21 @@ def print_message(msg, verbose=True):
 
 
 def TVGL(emp_cov_mats, n_processors, lamb, beta, indexOfPenalty,
-         max_iters=200, verbose=False, eps=3e-3, epsAbs=1e-3,
+         max_iters=200, verbose=False, epsAbs=1e-3,
          epsRel=1e-3, use_cluster=False):
     importlib.reload(InferenceGraph)
     if len(emp_cov_mats) == 0:
         return []
-    if isinstance(lamb,Iterable):
+    if isinstance(lamb, List) or isinstance(lamb, np.ndarray):
         if len(lamb) != len(emp_cov_mats):
             print(f'got lam : {lamb}, but {len(emp_cov_mats)} cov mats')
             assert False
     else:
         lamb = [lamb] * len(emp_cov_mats)
-    if isinstance(beta, Iterable):
-        assert len(beta) == len(emp_cov_mats)-1
+    if isinstance(beta, List) or isinstance(beta, np.ndarray):
+        assert len(beta) == len(emp_cov_mats) - 1
     else:
-        beta = [beta]*(len(emp_cov_mats)-1)
+        beta = [beta] * (len(emp_cov_mats) - 1)
 
     gvx = TGraphVX(ty=indexOfPenalty)
     n_obs, size = len(emp_cov_mats), emp_cov_mats[0].shape[0]
@@ -50,7 +53,7 @@ def TVGL(emp_cov_mats, n_processors, lamb, beta, indexOfPenalty,
         obj = -log_det(theta_i) + trace(mat * theta_i)  # + alpha*norm(S,1)
         gvx.AddNode(i, obj)
         if i > 0:  # Add edge to previous timestamp
-            _beta = beta[i-1]
+            _beta = beta[i - 1]
             currVar = gvx.GetNodeVariables(i)
             prevVar = gvx.GetNodeVariables(i - 1)
             edge_obj = _beta * norm(currVar['theta'] - prevVar['theta'], indexOfPenalty)

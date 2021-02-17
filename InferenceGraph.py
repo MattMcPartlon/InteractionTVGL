@@ -22,17 +22,17 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import builtins
+import ctypes
 import math
 import multiprocessing
 import sys
 import time
+from collections import defaultdict
 from ctypes import c_int64
-from multiprocessing import shared_memory, Lock
-from collections import defaultdict
-from collections import defaultdict
+from multiprocessing import shared_memory
 
+import numpy
 from cvxpy import *
-from scipy.sparse import lil_matrix
 # TGraphVX inherits from the TUNGraph object defined by Snap.py
 from snap.snap import TUNGraph
 
@@ -41,13 +41,13 @@ TYPE = 0
 node_vals = None
 edge_z_vals = None
 edge_u_vals = None
+node_list, edge_list = None, None
 shr_node_vals, shr_edge_u_vals, shr_edge_z_vals = None, None, None
 rc_tups_row_sorted, rc_tups_col_sorted = None, None
 z_old_shr = None
+import importlib
 
-import numpy
-import os
-import ctypes
+importlib.reload(shared_memory)
 
 clib = ctypes.cdll.LoadLibrary("libc.so.6")
 
@@ -64,7 +64,7 @@ clib = ctypes.cdll.LoadLibrary("libc.so.6")
 #   Information for each neighbor is two entries, appended in order.
 #   Starting index of the corresponding z-value in edge_z_vals. Then for u.
 (X_NID, X_OBJ, X_VARS, X_CON, X_IND, X_LEN, X_DEG, X_NEIGHBORS) = list(range(8))
-## ADMM Global Variables and Functions ##
+# ADMM Global Variables and Functions
 
 # By default, the objective function is Minimize().
 __default_m_func = Minimize
@@ -73,7 +73,7 @@ m_func = __default_m_func
 # By default, rho is 1.0. Default rho update is identity function and does not
 # depend on primal or dual residuals or thresholds.
 __default_rho = 1.0
-__default_rho_update_func = lambda rho, res_p, thr_p, res_d, thr_d: rho
+__default_rho_update_func = lambda _rho, res_p, thr_p, res_d, thr_d: rho
 rho = __default_rho
 # Rho update function takes 5 parameters
 # - Old value of rho
@@ -93,8 +93,6 @@ rho_update_func = __default_rho_update_func
 (Z_EID, Z_OBJ, Z_CON, Z_IVARS, Z_ILEN, Z_XIIND, Z_ZIJIND, Z_UIJIND, \
  Z_JVARS, Z_JLEN, Z_XJIND, Z_ZJIIND, Z_UJIIND) = list(range(13))
 
-lock = Lock()
-
 
 # Contain all x, z, and u values for each node and/or edge in ADMM. Use the
 # given starting index and length with getValue() to get individual node values
@@ -112,29 +110,14 @@ def SetRhoUpdateFunc(Func=None):
     rho_update_func = Func if Func else __default_rho_update_func
 
 
-
 # Extract a numpy array value from a shared Array.
 # Give shared array, starting index, and total length.
 def getValue(arr, index, length, shr_name=None):
-    #print(os.getpid(), 'getting :', index, '..', index + length)
-    if shr_name is not None:
-        existing_shm = shared_memory.SharedMemory(name=shr_name)
-        arr = numpy.frombuffer(existing_shm.buf)
-        lock.acquire()
-        a = arr[index:(index + length)]
-        # existing_shm.close()
-        lock.release()
-        print('got!')
-        return a
-        # with arr.get_lock():
-    #print('got!')
-    # return numpy.frombuffer(arr.get_obj())[index:(index+length)]
-    return numpy.array(arr[index:(index + length)])
-    # return a[index:(index + length)]
+    return tonumpyarray(arr)[index:index + length]
 
 
 def tonumpyarray(mp_arr):
-    return numpy.frombuffer(mp_arr.get_obj())
+    return numpy.frombuffer(mp_arr)
 
 
 def init(node_vals_, edge_u_vals_, edge_z_vals_):
@@ -145,31 +128,14 @@ def init(node_vals_, edge_u_vals_, edge_z_vals_):
 # Write value of numpy array nparr (with given length) to a shared Array at
 # the given starting index.
 def writeValue(sharedarr, index, nparr, length, shr_name=None):
-    # with sharedarr.get_lock():
-    # arr = numpy.frombuffer(sharedarr.get_obj())
-    #print(os.getpid(), 'setting :', index, '..', index + length)
-    print('writing value,',os.getpid())
-    if shr_name is not None:
-        existing_shm = shared_memory.SharedMemory(name=shr_name)
-        sharedarr = numpy.frombuffer(existing_shm.buf)
-        lock.acquire()
-        if length == 1:
-            nparr = [nparr]
-        sharedarr[index:(index + length)] = nparr
-        existing_shm.close()
-        lock.release()
-
-        #print('set!')
-        return
     if length == 1:
         nparr = [nparr]
     sharedarr[index:(index + length)] = nparr
-    print('finished writing value',os.getpid())
 
 
 def create_shared_block(arr: numpy.ndarray):
     shm = shared_memory.SharedMemory(create=True, size=arr.nbytes)
-    # # Now create a NumPy array backed by shared memory
+    # create a NumPy array backed by shared memory
     np_array = numpy.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf)
     np_array[:] = arr[:]  # Copy the original data into shared memory
     shm.close()
@@ -437,6 +403,7 @@ class TGraphVX(TUNGraph):
         global getValue, rho_update_func, writeValue
         global shr_node_vals, shr_edge_u_vals, shr_edge_z_vals
         global rc_tups_row_sorted, rc_tups_col_sorted, z_old_shr
+        rho = 1.0
         print('in __SolveADMM')
         if verbose:
             print('Distributed ADMM (%d processors)' % num_processors)
@@ -461,10 +428,10 @@ class TGraphVX(TUNGraph):
             # Calculate sum of dimensions of all Variables for this node
             size = sum([var.size[0] for (varID, varName, var, offset) in variables])
             # Nearly complete information package for this node
-            node_info[nid] = (nid, obj, variables, con, length, size, deg, \
+            node_info[nid] = (nid, obj, variables, con, length, size, deg,
                               neighbors)
             length += size
-        lock = True
+        lock = False
         # node_vals, shr_node_vals = create_shared_block(numpy.zeros(length))
         shr_node_vals = None  # shr_node_vals.name
         node_vals = multiprocessing.Array('d', [0.0] * length, lock=lock)
@@ -478,7 +445,7 @@ class TGraphVX(TUNGraph):
         # values Arrays
         length = 0
         print('in __SolveADMM (1)')
-        #rc_tups = []
+        # rc_tups = []
 
         for ei in self.Edges():
             etup = self.__GetEdgeTup(ei.GetSrcNId(), ei.GetDstNId())
@@ -515,15 +482,15 @@ class TGraphVX(TUNGraph):
         # edge variables.
         # Each row of A has one 1. There is a 1 at (i,j) if z_i = x_j.
         print('setting up sparse matrix...')
-        print(z_length)
-        print(x_length)
-        #nz_cols = numpy.zeros(z_length).astype(int)
-        #col_norm_buffer = numpy.zeros(x_length)
+        # print(z_length)
+        # print(x_length)
+        # nz_cols = numpy.zeros(z_length).astype(int)
+        # col_norm_buffer = numpy.zeros(x_length)
 
-        #A = lil_matrix((z_length, x_length), dtype=numpy.int8)
+        # A = lil_matrix((z_length, x_length), dtype=numpy.int8)
         rs = numpy.zeros(z_length, dtype=numpy.int64)
         col_cts = defaultdict(list)
-        min_col,max_col = 1e10,-1e10
+        min_col, max_col = 1e10, -1e10
         print('finished setting up sparse matrix')
         for ei in self.Edges():
             print('processing ei', ei)
@@ -534,43 +501,43 @@ class TGraphVX(TUNGraph):
             for offset in range(info_i[X_LEN]):
                 row = info_edge[Z_ZIJIND] + offset
                 col = info_i[X_IND] + offset
-                #A[row, col] = 1
-                #nz_cols[row] = col
-                #rc_tups.append([row, col])
-                rs[row]=col
+                # A[row, col] = 1
+                # nz_cols[row] = col
+                # rc_tups.append([row, col])
+                rs[row] = col
                 col_cts[col].append(row)
-                max_col, min_col = max(col,max_col),min(col,min_col)
+                max_col, min_col = max(col, max_col), min(col, min_col)
             for offset in range(info_j[X_LEN]):
                 row = info_edge[Z_ZJIIND] + offset
                 col = info_j[X_IND] + offset
-                #A[row, col] = 1
-                #nz_cols[row] = col
-                #rc_tups.append([row, col])
+                # A[row, col] = 1
+                # nz_cols[row] = col
+                # rc_tups.append([row, col])
                 rs[row] = col
                 col_cts[col].append(row)
-                max_col, min_col = max(col,max_col),min(col,min_col)
+                max_col, min_col = max(col, max_col), min(col, min_col)
 
         print('finished edge processing...')
         print('sorting row/col information')
         # sort these tuples on column
 
-        _rc_tups_col_sorted = numpy.zeros(2*len(rs),dtype=numpy.int64)
+        _rc_tups_col_sorted = numpy.zeros(2 * len(rs), dtype=numpy.int64)
         temp = 0
-        for i in range(min_col,max_col+1):
+        for i in range(min_col, max_col + 1):
             for row in col_cts[i]:
-                _rc_tups_col_sorted[temp]= row
-                temp+=1
+                _rc_tups_col_sorted[temp] = row
+                temp += 1
                 _rc_tups_col_sorted[temp] = i
-                temp+=1
-
+                temp += 1
+        nz_rc_count = len(rs)
         rc_tups_row_sorted = multiprocessing.Array(c_int64, len(rs), lock=lock)
-        rc_tups_col_sorted = multiprocessing.Array(c_int64, len(_rc_tups_col_sorted), lock=lock)
+        rc_tups_col_sorted = multiprocessing.Array(c_int64, len(_rc_tups_col_sorted), lock=False)
         print('finished sorting row/col information')
         print('writing values')
         writeValue(rc_tups_col_sorted, 0, _rc_tups_col_sorted, len(_rc_tups_col_sorted))
         writeValue(rc_tups_row_sorted, 0, rs, len(rs))
 
-        #A_tr = A.transpose()
+        # A_tr = A.transpose()
 
         # Create final node_list structure by adding on information for
         # node neighbors
@@ -590,38 +557,44 @@ class TGraphVX(TUNGraph):
                 entry.append(einfo[indices[1]])
             node_list.append(entry)
 
-
-        z_old_shr = multiprocessing.Array('d', [0] * z_length, lock = lock)
-        writeValue(z_old_shr,0,getValue(edge_z_vals, 0 ,z_length),z_length)  # getValue(edge_z_vals, 0, z_length, shr_name = shr_edge_z_vals)
-        pool = multiprocessing.Pool(num_processors)
+        z_old_shr = multiprocessing.Array('d', [0] * z_length, lock=lock)
+        writeValue(z_old_shr, 0, getValue(edge_z_vals, 0, z_length),
+                   z_length)  # getValue(edge_z_vals, 0, z_length, shr_name = shr_edge_z_vals)
         num_iterations = 0
 
         # Proceed until convergence criteria are achieved or the maximum
         # number of iterations has passed
         print('in __SolveADMM (4)')
-
+        pool = multiprocessing.Pool(num_processors)
+        print('n_processes', num_processors)
         while num_iterations <= maxIters:
-            print('n_processes', pool._processes)
+            iter_start = time.time()
             # Check convergence criteria
             print('num iters :', num_iterations)
             if num_iterations != 0:
-                print('checking convergence...')
+                # print('checking convergence...')
                 start = time.time()
                 out3 = \
                     driver(pool,
-                           x_length, z_length,
-                           eps_abs, eps_rel, verbose, rc_tups_col_sorted, rc_tups_row_sorted, num_processors)
+                           nz_rc_count,
+                           x_length,
+                           z_length,
+                           eps_abs,
+                           eps_rel,
+                           verbose,
+                           rc_tups_col_sorted,
+                           num_processors)
                 total3 = time.time() - start
-                print('finished check :', total3)
+                print('convergence check :', total3)
 
                 stop, res_pri, e_pri, res_dual, e_dual = out3
                 if stop:
                     break
-                writeValue(z_old_shr,0,numpy.array(edge_z_vals[:]),z_length)
+                writeValue(z_old_shr, 0, tonumpyarray(edge_z_vals), z_length)
                 # Update rho and scale u-values
                 rho_new = rho_update_func(rho, res_pri, e_pri, res_dual, e_dual)
                 scale = float(rho) / rho_new
-                edge_u_vals[:] = [i * scale for i in edge_u_vals]
+                edge_u_vals[:] = tonumpyarray(edge_u_vals) * scale
                 rho = rho_new
             num_iterations += 1
 
@@ -629,17 +602,16 @@ class TGraphVX(TUNGraph):
                 # Debugging information prints current iteration #
                 print('Iteration %d' % num_iterations)
             start = time.time()
-            print('starting admm_x')
             pool.map(ADMM_x, node_list)
-            print('finished admm x :',time.time()-start)
-            print('starting admm_z')
+            print('finished admm x :', time.time() - start)
             start = time.time()
             pool.map(ADMM_z, edge_list)
-            print('finished admm z :',time.time()-start)
-            print('starting admm_u')
+            print('finished admm z :', time.time() - start)
             start = time.time()
             pool.map(ADMM_u, edge_list)
-            print('finished admm u :',time.time()-start)
+            print('finished admm u :', time.time() - start)
+
+            print('total iteration time :', time.time() - iter_start)
         pool.close()
         pool.join()
 
@@ -1137,18 +1109,19 @@ class TGraphVX(TUNGraph):
 
 # Proximal operators
 def Prox_logdet(S, A, eta):
-    print('in prox log det,',os.getpid())
-    #assert numpy.array_equal(m, m.T)
-    #print('condition number :',numpy.linalg.cond(m))
-    #print('frobenius norm :',numpy.linalg.norm(m,ord='fro'))
-    #this is the time-consuming part
+    # print('in prox log det,',os.getpid())
+    # print('in prox_logdet!', os.getpid())
+    # print('m=m.t?',numpy.array_equal(m, m.T))
+    # print('starting wait...')
+    # time.sleep(numpy.random.uniform(0,1e-3))
+    # this is the time-consuming part
     d, q = numpy.linalg.eigh(eta * A - S)
-    q = numpy.matrix(q)
-    X_var = (1 / (2 * eta)) * q * (numpy.diag(d + numpy.sqrt(numpy.square(d) + (4 * eta) * numpy.ones(d.shape)))) * q.T
+    # q = numpy.matrix(q)
+    X_var = (1 / (2 * eta)) * q * (numpy.diag(d + numpy.sqrt(numpy.square(d) + (4 * eta)))) * q.T
     x_var = X_var[numpy.triu_indices(S.shape[1])]  # extract upper triangular part as update variable
     #        print 'x_update = ',x_var
-    print('finished prox_log_det',os.getpid())
-    return numpy.matrix(x_var).T
+    # print('finished prox_log_det',os.getpid())
+    return x_var  # numpy.matrix(x_var).T
 
 
 def Prox_lasso(a_ij, a_ji, eta, NID_diff):
@@ -1162,8 +1135,8 @@ def Prox_lasso(a_ij, a_ji, eta, NID_diff):
     for i in range(n, 0, -1):
         to_remove.append(k)
         k = k + i
-    ind[to_remove]=-1
-    ind = ind[ind>0]
+    ind[to_remove] = -1
+    ind = ind[ind > 0]
     if (NID_diff > 1):
         z_ij[ind] = Prox_onenorm(a_ij[ind], eta)
     else:
@@ -1215,8 +1188,10 @@ def Prox_penalty(a_ij, a_ji, eta, index_penalty):
             MaxIter = 100
             eps = 1e-3
             [Z_ij, Z_ji] = Prox_node_penalty(A_ij, A_ji, eta, MaxIter, eps)
-            z_ij = (numpy.squeeze(numpy.asarray(Z_ij[numpy.triu_indices(n)])))
-            z_ji = (numpy.squeeze(numpy.asarray(Z_ji[numpy.triu_indices(n)])))
+            z_ij = numpy.ravel(
+                Z_ij[numpy.triu_indices(n)])  # (numpy.squeeze(numpy.asarray(Z_ij[numpy.triu_indices(n)])))
+            z_ji = numpy.ravel(
+                Z_ji[numpy.triu_indices(n)])  # (numpy.squeeze(numpy.asarray(Z_ji[numpy.triu_indices(n)])))
             return z_ij, z_ji
         e = e[numpy.triu_indices(n)]
     e = e / alpha
@@ -1229,13 +1204,9 @@ def Prox_node_penalty(A_ij, A_ji, beta, MaxIter, eps):
     global rho
     n = A_ij.shape[0]
     I = numpy.identity(n)
-    U = numpy.ones([n, n]) / n
-    U1 = numpy.ones([n, n]) / n
-    U2 = numpy.ones([n, n]) / n
-    theta_1 = numpy.copy(U)
-    theta_2 = numpy.copy(U)
-    V = numpy.copy(U)
-    W = numpy.copy(U)
+    x = numpy.empty([6, n, n])
+    x[:] = 1 / n
+    U, U1, U2, theta_1, theta_2, W = x
 
     for k in range(MaxIter):
         A = ((theta_1 - theta_2 - W - U1) + (W.T - U2)) / 2
@@ -1284,7 +1255,7 @@ def ADMM_x(entry):
 
     # -----------------------Proximal operator ---------------------------
     x_update = []  # proximal update for the variable x
-    if (builtins.len(entry[1].args) > 1):
+    if (len(entry[1].args) > 1):
         #        print 'we are in logdet + trace node'
         cvxpyMat = entry[1].args[1].args[0].args[0]
         numpymat = cvxpyMat.value
@@ -1309,19 +1280,17 @@ def ADMM_x(entry):
                 # print(os.getpid(),'looped!')
             # print(os.getpid(),'admm x 2')
 
-        print(os.getpid(), 'admm x 3')
         A = upper2Full(a)
-        A = A / entry[X_DEG]
-        print(os.getpid(), 'admm x 4')
+        A /= entry[X_DEG]
         eta = entry[X_DEG] * rho / n_t
-        print(os.getpid(), 'admm x 5')
-        x_update = Prox_logdet(numpymat, A, eta)
-        print(os.getpid(), 'admm x 6')
-        solution = numpy.array(x_update).T.reshape(-1)
-        writeValue(node_vals, entry[X_IND] + variables[0][3], solution, variables[0][2].size[0], shr_name=shr_node_vals)
+        x_update = numpy.ravel(Prox_logdet(numpymat, A, eta))
+        # x_update = x_update.reshape(-1)
+        # print(x_update[0].shape)
 
-    else:
-        x_update = []  # no variable to update for dummy node
+        # solution = x_update#numpy.array(x_update).T.reshape(-1)
+        # assert len(x_update.shape)==1
+        writeValue(node_vals, entry[X_IND] + variables[0][3], x_update, variables[0][2].size[0], shr_name=shr_node_vals)
+
     return None
 
 
@@ -1461,7 +1430,7 @@ def A_norms(*args):
     global edge_z_vals, rc_tups_row_sorted, node_vals
     args = args[0]
     s, e = args
-    rc_tups_row_sorted_ = numpy.frombuffer(rc_tups_row_sorted, dtype=numpy.int64)[s:e]#.reshape(-1, 2)[s:e]
+    rc_tups_row_sorted_ = numpy.frombuffer(rc_tups_row_sorted, dtype=numpy.int64)[s:e]  # .reshape(-1, 2)[s:e]
     x = numpy.frombuffer(node_vals)
     z = numpy.frombuffer(edge_z_vals)
     Ax = x[rc_tups_row_sorted_]
@@ -1479,59 +1448,60 @@ def A_tr_norms(*args):
     u = numpy.frombuffer(edge_u_vals)
     s, e = args
     start = time.time()
-    rc_tups_col_sorted_ = numpy.frombuffer(rc_tups_col_sorted, dtype=numpy.int64)[2*s:2*e]
-    print('time to load rc_tups col sorted :',time.time()-start)
-    col_norm_buffer = numpy.zeros(rc_tups_col_sorted_[-1]-rc_tups_col_sorted_[1]+1)
+    rc_tups_col_sorted_ = numpy.frombuffer(rc_tups_col_sorted, dtype=numpy.int64)[2 * s:2 * e]
+    # print('time to load rc_tups col sorted :',time.time()-start)
+    col_norm_buffer = numpy.zeros(rc_tups_col_sorted_[-1] - rc_tups_col_sorted_[1] + 1)
     offset = rc_tups_col_sorted_[-1]
     # calculate dual residual
     z_diff = z - z_old
-    temp = rc_tups_col_sorted_[1::2]-offset
-    numpy.add.at(col_norm_buffer,temp,z_diff[rc_tups_col_sorted_[0::2]])
+    temp = rc_tups_col_sorted_[1::2] - offset
+    numpy.add.at(col_norm_buffer, temp, z_diff[rc_tups_col_sorted_[0::2]])
     res_dual = numpy.sum(numpy.square(rho * col_norm_buffer))
 
     # calculate A_tr dot u norm
     col_norm_buffer[:] = 0
-    numpy.add.at(col_norm_buffer,temp,u[rc_tups_col_sorted_[0::2]])
+    numpy.add.at(col_norm_buffer, temp, u[rc_tups_col_sorted_[0::2]])
     Atr_u_norm = numpy.sum(numpy.square(rho * col_norm_buffer))
     return [res_dual, Atr_u_norm]
+
 
 tr_endpts = []
 a_endpts = []
 
 
-def driver(pool, p, n,
-           e_abs, e_rel, verbose, rc_tups_col_sorted, rc_tups_row_sorted, chunks):
+def driver(pool, nz_rc_count, p, n,
+           e_abs, e_rel, verbose, rc_tups_col_sorted, chunks):
     if not a_endpts:
         # split input into chunks
-        chunk_len = len(rc_tups_row_sorted) // chunks
+        chunk_len = nz_rc_count // chunks
         # res_pri_sq, norm_AX_sq, norm_z_sq
         for i in range(chunks):
             s, e = chunk_len * i, chunk_len * (i + 1)
             if i == chunks - 1:
-                e = len(rc_tups_row_sorted)
+                e = nz_rc_count
             a_endpts.append((s, e))
     start = time.time()
     A_data = numpy.array(pool.map(A_norms, a_endpts))
-    print('time to get convergence data for A',time.time()-start)
+    # print('time to get convergence data for A',time.time()-start)
 
     # same thing for A_tr
     # res_dual, Atr_u_norm
-    chunk_len = len(rc_tups_row_sorted) // chunks
+    chunk_len = nz_rc_count // chunks
     if not tr_endpts:
         chunk_start = 0
         for i in range(chunks):
             s, e = chunk_start, chunk_len * (i + 1)
             if i == chunks - 1:
-                e = len(rc_tups_row_sorted)
+                e = nz_rc_count
             else:
-                while e < len(rc_tups_row_sorted) and rc_tups_col_sorted[2 * e + 1] == rc_tups_col_sorted[2 * e - 1]:
+                while e < nz_rc_count and rc_tups_col_sorted[2 * e + 1] == rc_tups_col_sorted[2 * e - 1]:
                     e += 1
-            tr_endpts.append((s,e))
+            tr_endpts.append((s, e))
             chunk_start = e
 
     start = time.time()
     Atr_data = numpy.array(pool.map(A_tr_norms, tr_endpts))
-    print('time for A.T',time.time()-start)
+    # print('time for A.T',time.time()-start)
     start = time.time()
     x = numpy.sqrt(numpy.sum(A_data, axis=0))
     y = numpy.sqrt(numpy.sum(Atr_data, axis=0))
@@ -1549,5 +1519,5 @@ def driver(pool, p, n,
         print('  res_dual:', res_dual)
         print('  e_dual:', e_dual)
     stop = (res_pri <= e_pri) and (res_dual <= e_dual)
-    print('time for rest:',time.time()-start)
+    # print('time for rest:',time.time()-start)
     return (stop, res_pri, e_pri, res_dual, e_dual)

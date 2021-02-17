@@ -2,11 +2,10 @@ from collections import defaultdict
 #import treeCl
 import numpy as np
 import os
-import sys
 from functools import partial
 from typing import Callable
 import time
-from utils import display_message,load_npy, parse_seqs
+from utils.utils import display_message,load_npy, parse_seqs
 
 """
 phylo_path = './test_phylo.dnd'
@@ -124,7 +123,7 @@ def partition_helper(clusters, n_clusters, d, ret_dists = False):
 #from cogent3.evolve.models import JTT92
 
 
-from bio_utils import AA_index_map
+from utils.utils import AA_index_map
 def rewrite_seqs(aln_path, save_path):
     seqs = []
     headers = []
@@ -164,8 +163,10 @@ def gen_phylo_clusters(aln_path, k = None, max_k = 4, out = None, dist_path = No
     start = time.time()
     nm = str(np.random.randint(1e10))
     ds_path = dist_path or f"./{nm}.fasta"
-    if not os.path.exists(ds_path):
-        os.makedirs(ds_path,exist_ok=True)
+    if not os.path.exists(ds_path) or os.path.isdir(ds_path):
+        if os.path.isdir(ds_path):
+            os.rmdir(ds_path)
+        os.makedirs(os.path.dirname(ds_path),exist_ok=True)
         calculator = DistanceCalculator('blosum62')
         ds = calculator.get_distance(aln)
         np.save(ds_path, ds)

@@ -15,7 +15,7 @@ for data in os.listdir(data_root):
     if not os.path.isdir(os.path.join(data_root,data)):
         print('not a directory')
         continue
-    if not data.startswith('result'):
+    if not (data.startswith('result') or data.startswith('target')):
         print('not a results folder')
         continue
     if 'output' not in os.listdir(os.path.join(data_root,data)):

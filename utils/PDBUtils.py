@@ -1,5 +1,4 @@
 import os
-import sys
 import numpy as np
 import scipy
 from scipy import spatial
@@ -13,12 +12,12 @@ import Bio.PDB.Dice
 from Bio.PDB.DSSP import DSSP
 from Bio.PDB.PDBExceptions import PDBException
 
-from Bio import pairwise2, SeqIO
+from Bio import pairwise2
 from Bio.SubsMat.MatrixInfo import blosum80
 
-from SelectAtoms import SelectCG, SelectCB
-from SequenceUtils import ValidAA3Letters
-from SSUtils import SS8Letter2SS3Letter
+from utils.SelectAtoms import SelectCG, SelectCB
+from utils.SequenceUtils import ValidAA3Letters
+from utils.SSUtils import SS8Letter2SS3Letter
 
 ## the distance of N and O atoms in the same residue
 NOdists = {'X': 3.06, 'ILE': 3.174216, 'GLN': 3.3115633, 'GLY': 3.2121522, 'GLU': 3.3253117, 'L': 3.2752273,

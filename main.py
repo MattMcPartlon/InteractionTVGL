@@ -1,20 +1,4 @@
 import os
-
-_n_threads = "4"
-os.environ["OMP_NUM_THREADS"] = _n_threads  # export OMP_NUM_THREADS=4
-os.environ["OPENBLAS_NUM_THREADS"] = _n_threads  # export OPENBLAS_NUM_THREADS=4
-os.environ["MKL_NUM_THREADS"] = _n_threads  # export MKL_NUM_THREADS=6
-os.environ["VECLIB_MAXIMUM_THREADS"] = _n_threads  # export VECLIB_MAXIMUM_THREADS=4
-os.environ["NUMEXPR_NUM_THREADS"] = _n_threads  # export NUMEXPR_NUM_THREADS=6
-
-from cd_hit_cluster import *
-from bio_utils import *
-from phylo_cluster import gen_phylo_clusters
-from TVGL_Interaction import TVGL, PenaltyType
-import sys
-import multiprocessing
-import time
-from utils import *
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 parser = ArgumentParser(description="Interaction TVGL",
@@ -33,12 +17,12 @@ parser.add_argument('aln',
                     type=str)
 parser.add_argument('-f', '--target_sparsity',
                     help="target sparsity for precision matrix (as decimal)",
-                    type = float,
+                    type=float,
                     default=0.03)
 parser.add_argument('-u', '--prec_thresh',
                     help="threshold to use when processing precision matrix."
                          "values P[i,j] with abs(P[i,j])<thresh will be set to 0",
-                    type = float,
+                    type=float,
                     default=1e-3)
 parser.add_argument('-t', '--cluster_type',
                     help="Method to use for clustering sequences in MSA",
@@ -86,6 +70,10 @@ parser.add_argument('-p', '--max_processors',
                     help="Maximum number of processors to allocate"
                          " (-1 for all available)",
                     type=int, default=-1)
+parser.add_argument('-y', '--max_threads',
+                    help="Maximum number of threads to allocate"
+                         " per-processor (-1 for all available)",
+                    type=str, default='4')
 parser.add_argument('-i', '--max_iters',
                     help="Maximum number of iterations to run ADMM updates",
                     type=int,
@@ -117,11 +105,18 @@ parser.add_argument('-b', '--beta',
                     default=[0.0025],
                     nargs='+',
                     type=float)
+parser.add_argument('-q', '--save_intermediate',
+                    help='whether or not to save intermediate results '
+                         '(while searching for optimal parameters)',
+                    choices=[0, 1],
+                    type=int,
+                    default=0)
 parser.add_argument('-r', '--save_cov_mats',
                     help='Whether the sample covaraince matrices should be saved in'
                          ' the output (defaults to true)',
                     choices=[0, 1],
-                    default=1)
+                    type=int,
+                    default=0)
 parser.add_argument('-v', '--verbose',
                     help='level of verbosity : prints status/ current iteration of'
                          ' algorithm, time taken to complete admm steps',
@@ -132,6 +127,25 @@ parser.add_argument('-o', '--cdhit_options',
                          'clustering program', nargs='+', type=str,
                     default='-c 0.8, -G 1 -n 5 -g 0 -aS 0.85 -aL 0'.split(' '))
 args = parser.parse_args()
+_n_threads = args.max_threads
+if int(_n_threads) > 0:
+    # os.environ["OMP_NUM_THREADS"] = _n_threads  # export OMP_NUM_THREADS=4
+    os.environ["OPENBLAS_NUM_THREADS"] = _n_threads  # export OPENBLAS_NUM_THREADS=4
+    os.environ["MKL_NUM_THREADS"] = _n_threads  # export MKL_NUM_THREADS=6
+    # os.environ["VECLIB_MAXIMUM_THREADS"] = _n_threads  # export VECLIB_MAXIMUM_THREADS=4
+    # os.environ["NUMEXPR_NUM_THREADS"] = _n_threads  # export NUMEXPR_NUM_THREADS=6
+
+# have to import after setting number of threads
+from cluster.cd_hit_cluster import *
+from cluster.phylo_cluster import gen_phylo_clusters
+import TVGL_Interaction
+from TVGL_Interaction import TVGL, PenaltyType
+import sys
+import time
+from utils.utils import *
+import importlib
+import multiprocessing
+from utils.bio_utils import CovarianceMatrix
 
 target_sparsity = args.target_sparsity
 penalty = PenaltyType.L1
@@ -139,6 +153,7 @@ penalty = PenaltyType.L1
 # Set the TVGL ADMM parameters
 lamb = args.lamb
 beta = args.beta
+
 if len(args.lamb) > 1:
     if len(args.lamb) != args.n_clusters:
         print('lambda values must be specified for'
@@ -197,14 +212,14 @@ display_message(f"generated {len(clusters)} clusters"
 
 n_cpus = multiprocessing.cpu_count()
 n_processors = n_cpus if args.max_processors < 0 else args.max_processors
-n_processors = min(n_processors, n_cpus, args.n_clusters)
+n_processors = min(n_processors, n_cpus, args.n_clusters + 1)
 
 all_seqs = [seq for cluster in clusters.values() for seq in cluster]
 
 if args.all_seq_clust:
     temp = {0: all_seqs}
     for i, clust in enumerate(clusters.values()):
-        if i >= args.n_clusters - 1:
+        if len(temp) == args.n_clusters:
             break
         temp[i + 1] = clust
     clusters = temp
@@ -220,19 +235,26 @@ display_message(f"finished generation of covariance"
 
 prev_lambs, prev_betas = [], []
 stop = False
-MAX_TRIES = 6
+MAX_TRIES = 8
 use_cluster = False
 prev_sparsities = []
 rfacts = [0] * len(clusters)
+
 print(f'using lambda : {lamb}, and beta {beta}')
 for i in range(MAX_TRIES):
+    importlib.reload(TVGL_Interaction)
+    importlib.reload(multiprocessing)
+    importlib.reload(np)
     start = time.time()
     sp = os.path.join(args.output_dir, f"{ptn_name}_{i}.npy")
     assert os.path.exists(os.path.dirname(sp))
     params_converged = False
-    if i > 0:
+    print('lam,', lamb, 'beta', beta)
+    if len(prev_sparsities) > 0:
         sparsity_diff = np.abs(np.array(prev_sparsities[-1]) - target_sparsity)
-        params_converged = np.alltrue(sparsity_diff < 1e-3)
+        params_converged = np.alltrue(sparsity_diff < 0.3 * 1e-2)
+        # lam_diff = np.array(lamb)-np.array(prev_lambs[-1])
+        # params_converged = params_converged or np.alltrue(np.abs(lam_diff)<1e-5)
     if params_converged or i == MAX_TRIES - 1:
         theta_set = TVGL(np.copy(cov_mats),
                          n_processors=n_processors,
@@ -265,7 +287,8 @@ for i in range(MAX_TRIES):
             'args': args.__dict__}
     if args.save_cov_mats:
         data['cov_mats'] = cov_mats
-    np.save(sp, data)
+    if args.save_intermediate or stop:
+        np.save(sp, data)
     display_message(f"finished tvgl", 1, args.verbose)
 
     l, b, s = adjust_lam_and_beta(theta_set,
@@ -273,12 +296,14 @@ for i in range(MAX_TRIES):
                                   beta,
                                   prev_sparsities,
                                   prev_lambs,
+                                  prev_betas,
                                   target_sparsity=target_sparsity,
                                   thresh=args.prec_thresh)
+
     prev_lambs.append(list(lamb))
     prev_betas.append(list(beta))
     prev_sparsities.append(list(s))
-    lamb, beta = l, b
+    lamb, beta = list(l), list(b)
     display_message(f"previous lambs : {prev_lambs}")
     display_message(f"previous betas : {prev_betas}")
     display_message(f"sparsities : {prev_sparsities}")

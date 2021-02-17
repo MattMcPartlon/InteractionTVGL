@@ -64,7 +64,9 @@ for ls,us in sparsities:
         'results_phylo_no_shrink_n_scale_more_iters_high_pen':'All seqs + partition into 3 clusters by phylo- high penalty (n_cov = 4)',
         'results_psi_cov': 'psicov low penalty (n_cov = 1)',
         'results_random_partition_more_iters_high_pen':'random partition of sequences (n_cov = 4)',
-        'results_phylo_no_shrink_n_scale_more_iters_partition_only_high_pen':'only phylo clusters (cluster of all seq removed)- high penalty (n_cov = 3)'
+        'results_phylo_no_shrink_n_scale_more_iters_partition_only_high_pen':'only phylo clusters (cluster of all seq removed)- high penalty (n_cov = 3)',
+        'results_psicov_22':'psicov',
+        'target_sp_03_v2':'adaptive phylo'
     }
 
     prec_header = 'method,cluster_type,min_sep,1,2,5,10,25,50,100,ls,us'.split(',')

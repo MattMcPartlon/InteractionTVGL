@@ -1,5 +1,5 @@
 import numpy as np
-from bio_utils import contact_norms, precision, get_sparsity
+from utils.utils import contact_norms, precision, get_sparsity
 import os
 from collections import defaultdict
 import sys
@@ -7,7 +7,10 @@ import sys
 def get_fams_and_names(output_root):
     fams,names = [],[]
     for x in os.listdir(output_root):
-        fams.append(x.split('_')[0])
+        tmp = x.split('_')[0]
+        if tmp.endswith('.npy'):
+            tmp=tmp[:-4]
+        fams.append(tmp)
         names.append(x)
     return fams,names
 
@@ -61,6 +64,12 @@ def process_precision_result(idx):
     print('num corr_mats :',len(corr_mats))
     print('seq length', len(get_seq(seq_path)))
     ps = []
+    if corr_mats is None:
+        return
+    if len(corr_mats)==0:
+        return
+    if not isinstance(corr_mats[0],np.ndarray):
+        return
     for j,theta in enumerate(corr_mats):
         #print('num non-zero elts',len(theta[theta!=0]))
         np.fill_diagonal(theta,0)
@@ -71,13 +80,14 @@ def process_precision_result(idx):
             pass
         ps.append(contact_norms(theta))
         s1 = get_sparsity(theta)
-        theta[np.abs(theta)<0.5*1e-3]=0
+        theta[np.abs(theta)<0.1*1e-3]=0
         print('sparsity theta:', get_sparsity(theta))
     for m,M in zip([5,10,23],[9,23,None]):
         for i,p in enumerate(ps):
             target_clust = False
-            if get_seq(seq_path) in predicted_data['clusters'][i] and j > 0:
-                target_clust = True
+            if 'clusters' in predicted_data:
+                if get_seq(seq_path) in predicted_data['clusters'][i] and j > 0:
+                    target_clust = True
             s2 = get_sparsity(p, thresh=0.1)
             pr = precision(p, ds, min_sep=m-1, max_sep=M+1 if M is not None else M)
             print('theta idx :',i,'min sep :',m,'max_sep',M,'precision :',pr)
@@ -89,15 +99,9 @@ def process_precision_result(idx):
 
 
 def process_precision_top_L_result(idx):
-    root = '/mnt/c/Users/mm851/Downloads/interaction_tvgl/'
-    predicted = root + 'results_6_small_clust/output/'
-    ground_truth = root + 'structures/ground_truth/'
-    seq_rt = root+'suppdata/seq'
-    if len(sys.argv)>1:
-        predicted = sys.argv[1]
-        ground_truth = sys.argv[2]
-        seq_rt = sys.argv[3]
-
+    predicted = sys.argv[1]
+    ground_truth = sys.argv[2]
+    seq_rt = sys.argv[3]
     fams,names = get_fams_and_names(predicted)
     print(len(names))
     precision_data = defaultdict(list)
@@ -124,6 +128,12 @@ def process_precision_top_L_result(idx):
     print('seq length', len(get_seq(seq_path)))
     L = len(get_seq(seq_path))
     ps = []
+    if corr_mats is None:
+        return
+    if len(corr_mats)==0:
+        return
+    if not isinstance(corr_mats[0],np.ndarray):
+        return
     for j,theta in enumerate(corr_mats):
         #print('num non-zero elts',len(theta[theta!=0]))
         np.fill_diagonal(theta,0)
@@ -132,15 +142,18 @@ def process_precision_top_L_result(idx):
         if nz == 0:
             #continue
             pass
-        ps.append(contact_norms(theta))
+        x = contact_norms(theta)
+        ps.append(x)
+        print(x.shape)
         s1 = get_sparsity(theta)
         theta[np.abs(theta)<0.5*1e-3]=0
         print('sparsity theta:', get_sparsity(theta))
     for m,M in zip([5,9,12,24],[None,None,None,None]):
         for i,p in enumerate(ps):
             target_clust = False
-            if get_seq(seq_path) in predicted_data['clusters'][i] and i > 0:
-                target_clust = True
+            if 'clusters' in predicted_data:
+                if get_seq(seq_path) in predicted_data['clusters'][i] and i > 0:
+                    target_clust = True
             s2 = get_sparsity(p, thresh=0.1)
             top = [L,L//2,L//5,L//10]
             pr = precision(p, ds, min_sep=m-1, max_sep=M+1 if M is not None else M,top=top)
@@ -170,8 +183,9 @@ if not os.path.exists(save_f):
 
     all_data = {}
     for dat in data:
-        for name in dat.keys():
-            all_data[name]=dat[name]
+        if dat is not None:
+            for name in dat.keys():
+                all_data[name]=dat[name]
     np.save(save_f,all_data)
 
 

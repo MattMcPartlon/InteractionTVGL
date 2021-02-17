@@ -43,6 +43,8 @@ def get_data(data, data_func, filter_func):
     all_data = defaultdict(lambda : defaultdict(list))
     for name in data:
         target_name = name.split('_')[0]
+        if target_name.endswith('.npy'):
+            target_name=target_name[:-4]
         target_dat = data[name]
         for entry in target_dat:
             if filter_func(entry):
@@ -57,6 +59,8 @@ def get_quantiles_n_avgs(data, qs = (0.25,0.5,0.75,1)):
     stat_data = defaultdict(lambda : defaultdict(lambda :defaultdict(list)))
     for name in data:
         target_dat = data[name]
+        if name.endswith('.npy'):
+            name = name[:-4]
         for k,v in target_dat.items():
             q_vals = np.quantile(v,axis=0,q=qs)
             assert len(q_vals[0])==len(v[0])
@@ -124,6 +128,7 @@ for ptn in os.listdir(seq_root):
 
 methods = [x.split('.')[0] for x in os.listdir(data_root) if x.endswith('.npy')]
 methods = [x for x in methods if '_top' not in x]
+print(methods)
 header ='method,target,seq len, msa depth,cluster type,s1,s2, min sep, max sep, data type'
 header = [x.strip() for x in header.split(',')]
 for pr in prs:
@@ -150,9 +155,16 @@ for method in methods:
             type_data = get_data(method_data, dfunc, ffunc)
             qs_and_avgs = get_quantiles_n_avgs(type_data)
             for target in qs_and_avgs:
-                data_to_add = [method, target]
-                data_to_add.append(seq_n_msa_info[target]['len'])
-                data_to_add.append(seq_n_msa_info[target]['depth'])
+                print(target)
+                print(target in qs_and_avgs)
+                t = target
+                if target.endswith('npy'):
+                    t = target[:-4]
+                    exit(1)
+
+                data_to_add = [method, t]
+                data_to_add.append(seq_n_msa_info[t]['len'])
+                data_to_add.append(seq_n_msa_info[t]['depth'])
                 data_to_add.extend([type,ls,us])
                 for min_sep in qs_and_avgs[target]:
                     _data_to_add = list(data_to_add)

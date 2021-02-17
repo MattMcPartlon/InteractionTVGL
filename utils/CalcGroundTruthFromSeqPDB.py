@@ -1,9 +1,8 @@
-import _pickle as cPickle
 import os
 import sys
 import numpy as np
-import PDBUtils
-from SequenceUtils import LoadFASTAFile
+from utils.utils import PDBUtils
+from utils.SequenceUtils import LoadFASTAFile
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
