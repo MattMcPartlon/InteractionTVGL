@@ -24,7 +24,7 @@ def print_message(msg, verbose=True):
 
 def TVGL(emp_cov_mats, n_processors, lamb, beta, indexOfPenalty,
          max_iters=200, verbose=False, epsAbs=1e-3,
-         epsRel=1e-3, use_cluster=False):
+         epsRel=1e-3):
     importlib.reload(InferenceGraph)
     if len(emp_cov_mats) == 0:
         return []
@@ -66,7 +66,7 @@ def TVGL(emp_cov_mats, n_processors, lamb, beta, indexOfPenalty,
     # need to write the parameters of ADMM
     print_message('solving... ', verbose)
     gvx.Solve(NumProcessors=n_processors, EpsAbs=epsAbs, EpsRel=epsRel,
-              Verbose=verbose, MaxIters=max_iters, UseClustering=use_cluster)
+              Verbose=verbose, MaxIters=max_iters)
 
     # Extract the set of estimated theta
     thetaSet = []

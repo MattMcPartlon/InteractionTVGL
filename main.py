@@ -26,7 +26,7 @@ parser.add_argument('-u', '--prec_thresh',
                     default=1e-3)
 parser.add_argument('-t', '--cluster_type',
                     help="Method to use for clustering sequences in MSA",
-                    choices=['phylo', 'cdhit'],
+                    choices=['phylo', 'cdhit','random'],
                     default='phylo')
 parser.add_argument('-e', '--phylo_path',
                     help='Path to phylogenetic tree file for MSA. If the file in'
@@ -146,6 +146,7 @@ from utils.utils import *
 import importlib
 import multiprocessing
 from utils.bio_utils import CovarianceMatrix
+from cluster.random_cluster import random_partition
 
 target_sparsity = args.target_sparsity
 penalty = PenaltyType.L1
@@ -184,7 +185,7 @@ if args.phylo_path:
 
 target_seq = parse_sequence(args.target_seq)
 
-use_phylo = args.cluster_type == 'phylo'
+
 display_message(f"Beginning clustering of protein"
                 f" sequences using method {args.cluster_type}",
                 1, args.verbose)
@@ -192,17 +193,22 @@ if args.cluster_path:
     clusters = {i: clust for i, clust in enumerate(load_npy(args.cluster_path))}
     args.n_clusters = len(clusters)
     args.all_seq_clust = False
+
 else:
-    if not use_phylo:
+    n_to_clust = args.n_clusters - 1 if args.all_seq_clust else args.n_clusters
+    if args.cluster_type == 'cdhit':
         clusters = gen_cdhit_clusters(args.aln, output_cluster_path='./tmp',
                                       cd_hit_options=' '.join(args.cdhit_options))
-    else:
-        n_to_clust = args.n_clusters - 1 if args.all_seq_clust else args.n_clusters
+    elif args.cluster_type == 'phylo':
         clusters = gen_phylo_clusters(args.aln,
                                       n_to_clust,
                                       dist_path=args.dist_path,
                                       out=args.phylo_path,
                                       verbose=args.verbose)
+    else :#random
+        clusters = random_partition(args.aln, n_to_clust)
+
+
 display_message("finished clustering of protein sequences...",
                 1, args.verbose)
 
@@ -236,9 +242,9 @@ display_message(f"finished generation of covariance"
 prev_lambs, prev_betas = [], []
 stop = False
 MAX_TRIES = 8
-use_cluster = False
 prev_sparsities = []
 rfacts = [0] * len(clusters)
+target_sparsity += 0.002 #add tol bc final run produces more sparse output
 
 print(f'using lambda : {lamb}, and beta {beta}')
 for i in range(MAX_TRIES):
@@ -262,8 +268,7 @@ for i in range(MAX_TRIES):
                          beta=beta,
                          indexOfPenalty=penalty,
                          max_iters=150,
-                         verbose=True,
-                         use_cluster=use_cluster)
+                         verbose=True)
         stop = True
         sp = os.path.join(args.output_dir, f"{ptn_name}_final.npy")
     else:
@@ -273,8 +278,7 @@ for i in range(MAX_TRIES):
                          beta=beta,
                          max_iters=args.max_iters,
                          indexOfPenalty=penalty,
-                         verbose=True,
-                         use_cluster=use_cluster)
+                         verbose=True)
     display_message(f'finished generating precision matrices.'
                     f' time : {(time.time() - start)} s',
                     1,

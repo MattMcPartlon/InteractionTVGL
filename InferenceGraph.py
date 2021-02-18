@@ -25,7 +25,6 @@ import builtins
 import ctypes
 import math
 import multiprocessing
-import sys
 import time
 from collections import defaultdict
 from ctypes import c_int64
@@ -90,7 +89,7 @@ rho_update_func = __default_rho_update_func
 # Z_X[IJ]IND: Starting index into shared node_vals Array for Node [ij]
 # Z_Z[IJ|JI]IND: Starting index into shared edge_z_vals Array for edge [ij|ji]
 # Z_U[IJ|JI]IND: Starting index into shared edge_u_vals Array for edge [ij|ji]
-(Z_EID, Z_OBJ, Z_CON, Z_IVARS, Z_ILEN, Z_XIIND, Z_ZIJIND, Z_UIJIND, \
+(Z_EID, Z_OBJ, Z_CON, Z_IVARS, Z_ILEN, Z_XIIND, Z_ZIJIND, Z_UIJIND,
  Z_JVARS, Z_JLEN, Z_XJIND, Z_ZJIIND, Z_UJIIND) = list(range(13))
 
 
@@ -112,7 +111,7 @@ def SetRhoUpdateFunc(Func=None):
 
 # Extract a numpy array value from a shared Array.
 # Give shared array, starting index, and total length.
-def getValue(arr, index, length, shr_name=None):
+def getValue(arr, index, length):
     return tonumpyarray(arr)[index:index + length]
 
 
@@ -127,7 +126,7 @@ def init(node_vals_, edge_u_vals_, edge_z_vals_):
 
 # Write value of numpy array nparr (with given length) to a shared Array at
 # the given starting index.
-def writeValue(sharedarr, index, nparr, length, shr_name=None):
+def writeValue(sharedarr, index, nparr, length):
     if length == 1:
         nparr = [nparr]
     sharedarr[index:(index + length)] = nparr
@@ -145,7 +144,7 @@ def create_shared_block(arr: numpy.ndarray):
 # Write the values for all of the Variables involved in a given Objective to
 # the given shared Array.
 # variables should be an entry from the node_values structure.
-def writeObjective(sharedarr, index, objective, variables, shr_name=None):
+def writeObjective(sharedarr, index, objective, variables):
     for v in objective.variables():
         vID = v.id
         value = v.value
@@ -154,7 +153,7 @@ def writeObjective(sharedarr, index, objective, variables, shr_name=None):
         for (varID, varName, var, offset) in variables:
 
             if varID == vID:
-                writeValue(sharedarr, index + offset, value, var.size[0], shr_name=shr_name)
+                writeValue(sharedarr, index + offset, value, var.size[0])
                 break
 
 
@@ -234,17 +233,10 @@ class TGraphVX(TUNGraph):
     # Option to use serial version or distributed ADMM.
     # maxIters optional parameter: Maximum iterations for distributed ADMM.
     def Solve(self, M=Minimize, UseADMM=True, NumProcessors=0, Rho=1.0,
-              MaxIters=20, EpsAbs=0.01, EpsRel=0.01, Verbose=False,
-              UseClustering=False, ClusterSize=1000):
+              MaxIters=80, EpsAbs=0.01, EpsRel=0.01, Verbose=False):
         global m_func
         # Use ADMM if the appropriate parameter is specified and if there
         # are edges in the graph.
-        # if __builtin__.len(SuperNodes) > 0:
-        if UseClustering and ClusterSize > 0:
-            SuperNodes = self.__ClusterGraph(ClusterSize)
-            self.__SolveClusterADMM(M, UseADMM, SuperNodes, NumProcessors, Rho, MaxIters,
-                                    EpsAbs, EpsRel, Verbose)
-            return
         if UseADMM and self.GetEdges() != 0:
             self.__SolveADMM(NumProcessors, Rho, MaxIters, EpsAbs, EpsRel,
                              Verbose)
@@ -298,7 +290,6 @@ class TGraphVX(TUNGraph):
         # initialize an empty supergraph
         supergraph = TGraphVX()
         nidToSuperidMap = {}
-        edgeToClusterTupMap = {}
         for snid in range(builtins.len(superNodes)):
             for nid in superNodes[snid]:
                 nidToSuperidMap[nid] = snid
@@ -359,8 +350,8 @@ class TGraphVX(TUNGraph):
                     superNodeVariables[supernid] = [(varId, superVarName, var, offset)]
                     superNodeValues[supernid] = value
                 else:
-                    superNodeOffset = sum([superNodeVariables[supernid][k][2].size[0] * \
-                                           superNodeVariables[supernid][k][2].size[1] \
+                    superNodeOffset = sum([superNodeVariables[supernid][k][2].size[0] *
+                                           superNodeVariables[supernid][k][2].size[1]
                                            for k in range(builtins.len(superNodeVariables[supernid]))])
                     superNodeVariables[supernid] += [(varId, superVarName, var, superNodeOffset)]
                     superNodeValues[supernid] = numpy.concatenate((superNodeValues[supernid], value))
@@ -559,7 +550,7 @@ class TGraphVX(TUNGraph):
 
         z_old_shr = multiprocessing.Array('d', [0] * z_length, lock=lock)
         writeValue(z_old_shr, 0, getValue(edge_z_vals, 0, z_length),
-                   z_length)  # getValue(edge_z_vals, 0, z_length, shr_name = shr_edge_z_vals)
+                   z_length)
         num_iterations = 0
 
         # Proceed until convergence criteria are achieved or the maximum
@@ -620,7 +611,7 @@ class TGraphVX(TUNGraph):
             nid = entry[X_NID]
             index = entry[X_IND]
             size = entry[X_LEN]
-            self.node_values[nid] = getValue(node_vals, index, size, shr_name=shr_node_vals)
+            self.node_values[nid] = getValue(node_vals, index, size)
         # Set TGraphVX status and value to match CVXPY
         if num_iterations <= maxIters:
             self.status = 'Optimal'
@@ -644,73 +635,6 @@ class TGraphVX(TUNGraph):
             result += self.edge_objectives[etup].value
         return result
 
-    def __CheckConvergence2(self, A, A_tr, x, z, z_old, u, rho, p, n,
-                            e_abs, e_rel, verbose):
-        norm = numpy.linalg.norm
-        Ax = A.dot(x)
-        r = Ax - z
-        s = rho * A_tr.dot(z - z_old)
-        # Primal and dual thresholds. Add .0001 to prevent the case of 0.
-        e_pri = math.sqrt(p) * e_abs + e_rel * max(norm(Ax), norm(z)) + .0001
-        e_dual = math.sqrt(n) * e_abs + e_rel * norm(rho * A_tr.dot(u)) + .0001
-        # Primal and dual residuals
-        res_pri = norm(r)
-        res_dual = norm(s)
-        if verbose:
-            # Debugging information to print convergence criteria values
-            print('  r:', res_pri)
-            print('  e_pri:', e_pri)
-            print('  s:', res_dual)
-            print('  e_dual:', e_dual)
-        stop = (res_pri <= e_pri) and (res_dual <= e_dual)
-        return (stop, res_pri, e_pri, res_dual, e_dual)
-
-    # Returns True if convergence criteria have been satisfied
-    # eps_abs = eps_rel = 0.01
-    # r = Ax - z
-    # s = rho * (A^T)(z - z_old)
-    # e_pri = sqrt(p) * e_abs + e_rel * max(||Ax||, ||z||)
-    # e_dual = sqrt(n) * e_abs + e_rel * ||rho * (A^T)u||
-    # Should stop if (||r|| <= e_pri) and (||s|| <= e_dual)
-    # Returns (boolean shouldStop, primal residual value, primal threshold,
-    #          dual residual value, dual threshold)
-    def __CheckConvergence(self, A, A_tr, x, z, z_old, u, rho, p, n,
-                           e_abs, e_rel, verbose, nz_cols, col_norm_buffer):
-        norm = numpy.linalg.norm
-        # A has only one non-zero entry per row, so would be a lot more efficient to
-        # just use x[nz_row_indices]
-        Ax = x[nz_cols]
-        r = Ax - z
-        res_pri = norm(r)
-
-        # calculate dual residual
-        z_diff = z - z_old
-        col_norm_buffer[:] = 0
-
-        for i, j in enumerate(nz_cols):
-            col_norm_buffer[j] += z_diff[i]
-        res_dual = norm(rho * col_norm_buffer)
-
-        # calculate A_tr dot u norm
-        col_norm_buffer[:] = 0
-        for i, j in enumerate(nz_cols):
-            col_norm_buffer[j] += u[i]
-        Atr_u_norm = norm(rho * col_norm_buffer)
-
-        # Primal and dual thresholds. Add .0001 to prevent the case of 0.
-        e_pri = math.sqrt(p) * e_abs + e_rel * max(norm(Ax), norm(z)) + .0001
-        e_dual = math.sqrt(n) * e_abs + e_rel * Atr_u_norm + .0001
-        # Primal and dual residuals
-
-        if verbose:
-            # Debugging information to print convergence criteria values
-            print('  res_pri:', res_pri)
-            print('  e_pri:', e_pri)
-            print('  res_dual:', res_dual)
-            print('  e_dual:', e_dual)
-        stop = (res_pri <= e_pri) and (res_dual <= e_dual)
-        return (stop, res_pri, e_pri, res_dual, e_dual)
-
     # API to get node Variable value after solving with ADMM.
     def GetNodeValue(self, NId, Name):
         self.__VerifyNId(NId)
@@ -720,22 +644,6 @@ class TGraphVX(TUNGraph):
                 value = self.node_values[NId]
                 return value[offset:(offset + var.size[0])]
         return None
-
-    # Prints value of all node variables to console or file, if given
-    def PrintSolution(self, Filename=None):
-        numpy.set_printoptions(linewidth=numpy.inf)
-        out = sys.stdout if (Filename is None) else open(Filename, 'w+')
-
-        out.write('Status: %s\n' % self.status)
-        out.write('Total Objective: %f\n' % self.value)
-        for ni in self.Nodes():
-            nid = ni.GetId()
-            s = 'Node %d:\n' % nid
-            out.write(s)
-            for (varID, varName, var, offset) in self.node_variables[nid]:
-                val = numpy.transpose(self.GetNodeValue(nid, varName))
-                s = '  %s %s\n' % (varName, str(val))
-                out.write(s)
 
     # Helper method to verify existence of an NId.
     def __VerifyNId(self, NId):
@@ -884,9 +792,12 @@ class TGraphVX(TUNGraph):
                 nid = ni.GetId()
                 while True:
                     line = infile.readline()
-                    if line == '': stop = True
-                    if not line.startswith('#'): break
-                if stop: break
+                    if line == '':
+                        stop = True
+                    if not line.startswith('#'):
+                        break
+                if stop:
+                    break
                 data = [x.strip() for x in line.split(',')]
                 ret = ObjFunc(data)
                 if type(ret) is tuple:
@@ -898,7 +809,8 @@ class TGraphVX(TUNGraph):
                     self.SetNodeObjective(nid, ret)
         if NodeIDs is None:
             for line in infile:
-                if line.startswith('#'): continue
+                if line.startswith('#'):
+                    continue
                 data = [x.strip() for x in line.split(',')]
                 ret = ObjFunc(data)
                 if type(ret) is tuple:
@@ -914,7 +826,8 @@ class TGraphVX(TUNGraph):
                     line = infile.readline()
                     if line == '':
                         raise Exception('File %s is too short.' % Filename)
-                    if not line.startswith('#'): break
+                    if not line.startswith('#'):
+                        break
                 data = [x.strip() for x in line.split(',')]
                 ret = ObjFunc(data)
                 if type(ret) is tuple:
@@ -961,7 +874,7 @@ class TGraphVX(TUNGraph):
                     self.SetEdgeObjective(src_id, dst_id, ret)
             return
         infile = open(Filename, 'r')
-        if EdgeIDs == None and (SrcIdCol == None or DstIdCol == None):
+        if EdgeIDs is None and (SrcIdCol is None or DstIdCol is None):
             stop = False
             for ei in self.Edges():
                 src_id = ei.GetSrcNId()
@@ -985,9 +898,10 @@ class TGraphVX(TUNGraph):
                 else:
                     # Singleton object = assume it is the objective
                     self.SetEdgeObjective(src_id, dst_id, ret)
-        if EdgeIDs == None:
+        if EdgeIDs is None:
             for line in infile:
-                if line.startswith('#'): continue
+                if line.startswith('#'):
+                    continue
                 data = [x.strip() for x in line.split(',')]
                 src_id = int(data[SrcIdCol])
                 dst_id = int(data[DstIdCol])
@@ -1008,7 +922,8 @@ class TGraphVX(TUNGraph):
                     line = infile.readline()
                     if line == '':
                         raise Exception('File %s is too short.' % Filename)
-                    if not line.startswith('#'): break
+                    if not line.startswith('#'):
+                        break
                 data = [x.strip() for x in line.split(',')]
                 src_vars = self.GetNodeVariables(etup[0])
                 dst_vars = self.GetNodeVariables(etup[1])
@@ -1021,90 +936,6 @@ class TGraphVX(TUNGraph):
                     # Singleton object = assume it is the objective
                     self.SetEdgeObjective(etup[0], etup[1], ret)
         infile.close()
-
-    """return clusters of nodes of the original graph.Each cluster corresponds to 
-    a supernode in the supergraph"""
-
-    def __ClusterGraph(self, clusterSize):
-        # obtain a random shuffle of the nodes
-        nidArray = [ni.GetId() for ni in self.Nodes()]
-        numpy.random.shuffle(nidArray)
-        visitedNode = {}
-        for nid in nidArray:
-            visitedNode[nid] = False
-        superNodes = []
-        superNode, superNodeSize = [], 0
-        for nid in nidArray:
-            if not visitedNode[nid]:
-                oddLevel, evenLevel, isOdd = [], [], True
-                oddLevel.append(nid)
-                visitedNode[nid] = True
-                # do a level order traversal and add nodes to the superNode until the
-                # size of the supernode variables gets larger than clusterSize
-                while True:
-                    if isOdd:
-                        if builtins.len(oddLevel) > 0:
-                            while len(oddLevel) > 0:
-                                topId = oddLevel.pop(0)
-                                node = TUNGraph.GetNI(self, topId)
-                                varSize = sum([variable[2].size[0] *
-                                               variable[2].size[1]
-                                               for variable in self.node_variables[topId]])
-                                if varSize + superNodeSize <= clusterSize:
-                                    superNode.append(topId)
-                                    superNodeSize = varSize + superNodeSize
-                                else:
-                                    if builtins.len(superNode) > 0:
-                                        superNodes.append(superNode)
-                                    superNodeSize = varSize
-                                    superNode = [topId]
-                                neighbors = [node.GetNbrNId(j)
-                                             for j in range(node.GetDeg())]
-                                for nbrId in neighbors:
-                                    if not visitedNode[nbrId]:
-                                        evenLevel.append(nbrId)
-                                        visitedNode[nbrId] = True
-                            isOdd = False
-                            # sort the nodes according to their variable size
-                            if builtins.len(evenLevel) > 0:
-                                evenLevel.sort(key=lambda nid: sum([variable[2].size[0] *
-                                                                    variable[2].size[1] for variable
-                                                                    in self.node_variables[nid]]))
-                        else:
-                            break
-                    else:
-                        if builtins.len(evenLevel) > 0:
-                            while builtins.len(evenLevel) > 0:
-                                topId = evenLevel.pop(0)
-                                node = TUNGraph.GetNI(self, topId)
-                                varSize = sum([variable[2].size[0] *
-                                               variable[2].size[1]
-                                               for variable in self.node_variables[topId]])
-                                if varSize + superNodeSize <= clusterSize:
-                                    superNode.append(topId)
-                                    superNodeSize = varSize + superNodeSize
-                                else:
-                                    if builtins.len(superNode) > 0:
-                                        superNodes.append(superNode)
-                                    superNodeSize = varSize
-                                    superNode = [topId]
-                                neighbors = [node.GetNbrNId(j)
-                                             for j in range(node.GetDeg())]
-                                for nbrId in neighbors:
-                                    if not visitedNode[nbrId]:
-                                        oddLevel.append(nbrId)
-                                        visitedNode[nbrId] = True
-                            isOdd = True
-                            # sort the nodes according to their variable size
-                            if builtins.len(oddLevel) > 0:
-                                oddLevel.sort(key=lambda _nid: sum([variable[2].size[0] *
-                                                                    variable[2].size[1] for variable
-                                                                    in self.node_variables[_nid]]))
-                        else:
-                            break
-        if superNode not in superNodes:
-            superNodes.append(superNode)
-        return superNodes
 
 
 # Proximal operators
@@ -1137,7 +968,7 @@ def Prox_lasso(a_ij, a_ji, eta, NID_diff):
         k = k + i
     ind[to_remove] = -1
     ind = ind[ind > 0]
-    if (NID_diff > 1):
+    if NID_diff > 1:
         z_ij[ind] = Prox_onenorm(a_ij[ind], eta)
     else:
         z_ji[ind] = Prox_onenorm(a_ji[ind], eta)
@@ -1227,9 +1058,6 @@ def Prox_node_penalty(A_ij, A_ji, beta, MaxIter, eps):
         deltaU1 = ((V + W) - (theta_1 - theta_2))
         deltaU2 = (V - W.T)
         if numpy.linalg.norm(deltaU1, 'fro') < eps and numpy.linalg.norm(deltaU1, 'fro') < eps:
-            U1 = U1 + deltaU1
-            U2 = U2 + deltaU2
-            #            print 'iteration number is', k
             break
         U1 = U1 + deltaU1
         U2 = U2 + deltaU2
@@ -1251,45 +1079,30 @@ def ADMM_x(entry):
     global rho
     global shr_edge_z_vals, shr_edge_u_vals, shr_node_vals
     variables = entry[X_VARS]
-    #    norms = 0
-
     # -----------------------Proximal operator ---------------------------
-    x_update = []  # proximal update for the variable x
-    if (len(entry[1].args) > 1):
-        #        print 'we are in logdet + trace node'
+    if len(entry[1].args) > 1:
         cvxpyMat = entry[1].args[1].args[0].args[0]
         numpymat = cvxpyMat.value
         n_t = 1  # Assume number of samples is 1 at each node, need to be alterned alter
         # Iterate through all neighbors of the node
         mat_shape = (int(numpymat.shape[1] * (numpymat.shape[1] + 1) / 2.0),)
         a = numpy.zeros(mat_shape)
-        #        print 'degree = ', entry[X_DEG]
         for i in range(entry[X_DEG]):  # entry[X_DEG] = 3 if the node is neither first and the last one
             z_index = X_NEIGHBORS + (2 * i)
             u_index = z_index + 1
             zi = entry[z_index]
             ui = entry[u_index]
-            # print(os.getpid(),'admm x 1')
             # Add norm for Variables corresponding to the node
             for (varID, varName, var, offset) in variables:
-                z = getValue(edge_z_vals, zi + offset, var.size[0], shr_name=shr_edge_z_vals)
-                # print(os.getpid(),'got z admmx')
-                u = getValue(edge_u_vals, ui + offset, var.size[0], shr_name=shr_edge_u_vals)
-                # print(os.getpid(),'got u admmx')
+                z = getValue(edge_z_vals, zi + offset, var.size[0])
+                u = getValue(edge_u_vals, ui + offset, var.size[0])
                 a += (z - u)
-                # print(os.getpid(),'looped!')
-            # print(os.getpid(),'admm x 2')
 
         A = upper2Full(a)
         A /= entry[X_DEG]
         eta = entry[X_DEG] * rho / n_t
         x_update = numpy.ravel(Prox_logdet(numpymat, A, eta))
-        # x_update = x_update.reshape(-1)
-        # print(x_update[0].shape)
-
-        # solution = x_update#numpy.array(x_update).T.reshape(-1)
-        # assert len(x_update.shape)==1
-        writeValue(node_vals, entry[X_IND] + variables[0][3], x_update, variables[0][2].size[0], shr_name=shr_node_vals)
+        writeValue(node_vals, entry[X_IND] + variables[0][3], x_update, variables[0][2].size[0])
 
     return None
 
@@ -1310,8 +1123,8 @@ def ADMM_z(entry):
         flag = 0
         variables_i = entry[Z_IVARS]
         for (varID, varName, var, offset) in variables_i:
-            x_i = getValue(node_vals, entry[Z_XIIND] + offset, var.size[0], shr_name=shr_node_vals)
-            u_ij = getValue(edge_u_vals, entry[Z_UIJIND] + offset, var.size[0], shr_name=shr_edge_u_vals)
+            x_i = getValue(node_vals, entry[Z_XIIND] + offset, var.size[0])
+            u_ij = getValue(edge_u_vals, entry[Z_UIJIND] + offset, var.size[0])
             if flag == 0:
                 a_ij = (x_i + u_ij)
                 flag = 1
@@ -1322,8 +1135,8 @@ def ADMM_z(entry):
         flag = 0
         variables_j = entry[Z_JVARS]
         for (varID, varName, var, offset) in variables_j:
-            x_j = getValue(node_vals, entry[Z_XJIND] + offset, var.size[0], shr_name=shr_node_vals)
-            u_ji = getValue(edge_u_vals, entry[Z_UJIIND] + offset, var.size[0], shr_name=shr_edge_u_vals)
+            x_j = getValue(node_vals, entry[Z_XJIND] + offset, var.size[0])
+            u_ji = getValue(edge_u_vals, entry[Z_UJIIND] + offset, var.size[0])
             if flag == 0:
                 a_ji = (x_j + u_ji)
                 flag = 1
@@ -1339,7 +1152,7 @@ def ADMM_z(entry):
         eta = entry[1].args[
                   0].value / rho  # where entry[1].args[0].value can be alpha or bete depending on NID_diff
 
-        if (numpy.abs(NID_diff) <= 1):  # for psi penalty edge
+        if numpy.abs(NID_diff) <= 1:  # for psi penalty edge
             #        beta = entry[1].args[0].value
             [z_ij, z_ji] = Prox_penalty(a_ij, a_ji, eta, TYPE)
         #        print 'we are in psi penalty edge, beta = ', entry[1].args[0].value
@@ -1347,12 +1160,12 @@ def ADMM_z(entry):
             #        print 'we are in lasso penalty edge, alpha = ', entry[1].args[0].value
             [z_ij, z_ji] = Prox_lasso(a_ij, a_ji, eta, NID_diff)
 
-        if (NID_diff >= -1):
+        if NID_diff >= -1:
             writeValue(edge_z_vals, entry[Z_ZIJIND] + variables_i[0][3], z_ij, variables_i[0][2].size[0],
-                       shr_name=shr_edge_z_vals)
-        if (NID_diff <= 1):
+                       )
+        if NID_diff <= 1:
             writeValue(edge_z_vals, entry[Z_ZJIIND] + variables_j[0][3], z_ji, variables_j[0][2].size[0],
-                       shr_name=shr_edge_z_vals)
+                       )
     #    -----------------------Proximal operator ---------------------------
     #    print 'end of proximal operator'
     #
@@ -1362,22 +1175,16 @@ def ADMM_z(entry):
         constraints = entry[Z_CON]
         norms = 0
         variables_i = entry[Z_IVARS]
-        #    print 'here 1'
         for (varID, varName, var, offset) in variables_i:
-            #        print 'var = ', var
-            x_i = getValue(node_vals, entry[Z_XIIND] + offset, var.size[0], shr_name=shr_node_vals)
-            u_ij = getValue(edge_u_vals, entry[Z_UIJIND] + offset, var.size[0], shr_name=shr_edge_u_vals)
+            x_i = getValue(node_vals, entry[Z_XIIND] + offset, var.size[0])
+            u_ij = getValue(edge_u_vals, entry[Z_UIJIND] + offset, var.size[0])
             norms += square(norm(x_i - var + u_ij, 'fro'))
-        #        norms += square(norm(x_i - var + u_ij))
         variables_j = entry[Z_JVARS]
 
-        #    print 'here 2'
         for (varID, varName, var, offset) in variables_j:
-            x_j = getValue(node_vals, entry[Z_XJIND] + offset, var.size[0], shr_name=shr_node_vals)
-            u_ji = getValue(edge_u_vals, entry[Z_UJIIND] + offset, var.size[0], shr_name=shr_edge_u_vals)
+            x_j = getValue(node_vals, entry[Z_XJIND] + offset, var.size[0])
+            u_ji = getValue(edge_u_vals, entry[Z_UJIIND] + offset, var.size[0])
             norms += square(norm(x_j - var + u_ji, 'fro'))
-        #        norms += square(norm(x_j - var + u_ji))
-        #    print 'here 2-1'
         objective = m_func(objective + (rho / 2) * norms)
         problem = Problem(objective, constraints)
 
@@ -1390,16 +1197,9 @@ def ADMM_z(entry):
             print("ECOS error: using SCS for z update")
             problem.solve(solver=SCS)
 
-        #    jj = 0
-        #    for v in objective.variables():
-        #        jj = jj + 1
-        #        value = v.value
-        #        print
-        #        print 'jj = ', jj,'value.shape = ', value.shape
-
         # Write back result of z-update. Must write back for i- and j-node
-        writeObjective(edge_z_vals, entry[Z_ZIJIND], objective, variables_i, shr_name=shr_edge_z_vals)
-        writeObjective(edge_z_vals, entry[Z_ZJIIND], objective, variables_j, shr_name=shr_edge_z_vals)
+        writeObjective(edge_z_vals, entry[Z_ZIJIND], objective, variables_i)
+        writeObjective(edge_z_vals, entry[Z_ZJIIND], objective, variables_j)
 
     # ----------------------- Use CVXPY  -----------------------------
 
@@ -1413,16 +1213,14 @@ def ADMM_u(entry):
     global shr_edge_z_vals, shr_edge_u_vals, shr_node_vals
 
     size_i = entry[Z_ILEN]
-    uij = getValue(edge_u_vals, entry[Z_UIJIND], size_i, shr_name=shr_edge_u_vals) + \
-          getValue(node_vals, entry[Z_XIIND], size_i, shr_name=shr_node_vals) - \
-          getValue(edge_z_vals, entry[Z_ZIJIND], size_i, shr_name=shr_edge_z_vals)
-    writeValue(edge_u_vals, entry[Z_UIJIND], uij, size_i, shr_name=shr_edge_u_vals)
+    uij = getValue(edge_u_vals, entry[Z_UIJIND], size_i) + getValue(node_vals, entry[Z_XIIND], size_i) - getValue(
+        edge_z_vals, entry[Z_ZIJIND], size_i)
+    writeValue(edge_u_vals, entry[Z_UIJIND], uij, size_i)
 
     size_j = entry[Z_JLEN]
-    uji = getValue(edge_u_vals, entry[Z_UJIIND], size_j, shr_name=shr_edge_u_vals) + \
-          getValue(node_vals, entry[Z_XJIND], size_j, shr_name=shr_node_vals) - \
-          getValue(edge_z_vals, entry[Z_ZJIIND], size_j, shr_name=shr_edge_z_vals)
-    writeValue(edge_u_vals, entry[Z_UJIIND], uji, size_j, shr_name=shr_edge_u_vals)
+    uji = getValue(edge_u_vals, entry[Z_UJIIND], size_j) + getValue(node_vals, entry[Z_XJIND], size_j) - getValue(
+        edge_z_vals, entry[Z_ZJIIND], size_j)
+    writeValue(edge_u_vals, entry[Z_UJIIND], uji, size_j)
     return entry
 
 
@@ -1447,7 +1245,6 @@ def A_tr_norms(*args):
     z_old = numpy.frombuffer(z_old_shr)
     u = numpy.frombuffer(edge_u_vals)
     s, e = args
-    start = time.time()
     rc_tups_col_sorted_ = numpy.frombuffer(rc_tups_col_sorted, dtype=numpy.int64)[2 * s:2 * e]
     # print('time to load rc_tups col sorted :',time.time()-start)
     col_norm_buffer = numpy.zeros(rc_tups_col_sorted_[-1] - rc_tups_col_sorted_[1] + 1)
@@ -1470,23 +1267,39 @@ a_endpts = []
 
 
 def driver(pool, nz_rc_count, p, n,
-           e_abs, e_rel, verbose, rc_tups_col_sorted, chunks):
+           e_abs, e_rel, verbose, _rc_tups_col_sorted, chunks):
+    """
+    Returns True if convergence criteria have been satisfied
+    eps_abs = eps_rel = 0.01
+    r = Ax - z
+    s = rho * (A^T)(z - z_old)
+    e_pri = sqrt(p) * e_abs + e_rel * max(||Ax||, ||z||)
+    e_dual = sqrt(n) * e_abs + e_rel * ||rho * (A^T)u||
+    Should stop if (||r|| <= e_pri) and (||s|| <= e_dual)
+    Returns (boolean shouldStop, primal residual value, primal threshold,
+             dual residual value, dual threshold)
+    :param pool:
+    :param nz_rc_count:
+    :param p:
+    :param n:
+    :param e_abs:
+    :param e_rel:
+    :param verbose:
+    :param _rc_tups_col_sorted:
+    :param chunks:
+    :return:
+    """
+    chunk_len = nz_rc_count // chunks
     if not a_endpts:
         # split input into chunks
-        chunk_len = nz_rc_count // chunks
         # res_pri_sq, norm_AX_sq, norm_z_sq
         for i in range(chunks):
             s, e = chunk_len * i, chunk_len * (i + 1)
             if i == chunks - 1:
                 e = nz_rc_count
             a_endpts.append((s, e))
-    start = time.time()
     A_data = numpy.array(pool.map(A_norms, a_endpts))
-    # print('time to get convergence data for A',time.time()-start)
 
-    # same thing for A_tr
-    # res_dual, Atr_u_norm
-    chunk_len = nz_rc_count // chunks
     if not tr_endpts:
         chunk_start = 0
         for i in range(chunks):
@@ -1494,24 +1307,20 @@ def driver(pool, nz_rc_count, p, n,
             if i == chunks - 1:
                 e = nz_rc_count
             else:
-                while e < nz_rc_count and rc_tups_col_sorted[2 * e + 1] == rc_tups_col_sorted[2 * e - 1]:
+                while e < nz_rc_count and _rc_tups_col_sorted[2 * e + 1] == _rc_tups_col_sorted[2 * e - 1]:
                     e += 1
             tr_endpts.append((s, e))
             chunk_start = e
 
-    start = time.time()
     Atr_data = numpy.array(pool.map(A_tr_norms, tr_endpts))
-    # print('time for A.T',time.time()-start)
-    start = time.time()
     x = numpy.sqrt(numpy.sum(A_data, axis=0))
     y = numpy.sqrt(numpy.sum(Atr_data, axis=0))
+    # Primal and dual residuals
     res_pri, norm_Ax, norm_z = x
     res_dual, Atr_u_norm = y
     # Primal and dual thresholds. Add .0001 to prevent the case of 0.
     e_pri = math.sqrt(p) * e_abs + e_rel * max(norm_Ax, norm_z) + .0001
     e_dual = math.sqrt(n) * e_abs + e_rel * Atr_u_norm + .0001
-    # Primal and dual residuals
-
     if verbose:
         # Debugging information to print convergence criteria values
         print('  res_pri:', res_pri)
@@ -1519,5 +1328,4 @@ def driver(pool, nz_rc_count, p, n,
         print('  res_dual:', res_dual)
         print('  e_dual:', e_dual)
     stop = (res_pri <= e_pri) and (res_dual <= e_dual)
-    # print('time for rest:',time.time()-start)
-    return (stop, res_pri, e_pri, res_dual, e_dual)
+    return stop, res_pri, e_pri, res_dual, e_dual

@@ -4,7 +4,7 @@ from typing import List
 import lazy_property
 import numpy as np
 
-from utils.utils import CalcSeqWeight
+from utils.msa_utils import CalcSeqWeight
 
 AA_alphabet = "ARNDCQEGHILKMFPSTWYV-"
 AA_index_map = {aa: i for i, aa in enumerate(AA_alphabet)}

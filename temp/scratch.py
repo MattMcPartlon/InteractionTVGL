@@ -2,7 +2,8 @@ import numpy as np
 """
 a = np.random.randint(1,10,(5,10))
 print(np.quantile(a,q=(0.5,0.75),axis=0))
-
+;wq:wq
+:wq
 k = 0
 n1 = 38
 a_ij = np.empty((n1,n1))
@@ -14,7 +15,7 @@ for i in range(n, 0, -1):
     ind.remove(k)
     k = k + i
 ind2 = np.arange(n1)
-ind2[to_rem]=-1
+ind2[to_rem]=-1::wq:q:wq
 print(ind2[ind2>0])
 print(ind)
 print(np.array_equal(ind2[ind2>0],ind))
@@ -45,6 +46,9 @@ print(x)
 
 print(' '.join(['a','b']))
 """
+
+import sys
+print(sys.path)
 from sklearn.gaussian_process import GaussianProcessRegressor
 def gp_reg(xs, ys, target,s=0,e=1):
     gpr = GaussianProcessRegressor(n_restarts_optimizer=3)
@@ -246,3 +250,8 @@ for i in range(len(previous_lambs)-2):
     #print('output',np.round(l,6),np.round(pred,4))
     print(simple_gpr_inverse(l,s,0.03))
     print()
+
+from random import shuffle
+a = [1,2,3,4,5,6]
+shuffle(a)
+print(a)

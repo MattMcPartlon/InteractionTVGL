@@ -98,7 +98,7 @@ def average_product_correct(contact_norms):
         for j in range(len(contact_norms)):
             contact_norms[i, j] = contact_norms[i, j] - ((s_cols[i] * s_cols[j]) / s_all)
 
-from utils.utils import AA_index_map
+from utils.bio_utils import AA_index_map
 def contact_norms(arr, k=21):
     n = len(arr) // k
     ns = np.zeros((n, n))
@@ -159,4 +159,5 @@ def scale_spectrum(cov_mats):
     max_trace = np.argmax(traces)
     scales = max_trace/traces
     return np.array([scale*c for scale,c in zip(scales,cov_mats)])
+
 
