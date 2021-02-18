@@ -399,7 +399,7 @@ class TGraphVX(TUNGraph):
         global rc_tups_row_sorted, rc_tups_col_sorted, z_old_shr
         rho = 1.0
         logger.info('in __SolveADMM')
-        logger.info('Distributed ADMM (%d processors)' % num_processors)
+        logger.info(f'Distributed ADMM {num_processors}')
         rho = rho_param
         # Organize information for each node in helper node_info structure
         node_info = {}
@@ -480,7 +480,7 @@ class TGraphVX(TUNGraph):
         min_col, max_col = 1e10, -1e10
         logger.info('finished setting up sparse matrix')
         for ei in self.Edges():
-            logger.info('processing ei', ei)
+            logger.info(f'processing ei: {ei}')
             etup = self.__GetEdgeTup(ei.GetSrcNId(), ei.GetDstNId())
             info_edge = edge_info[etup]
             info_i = node_info[etup[0]]
@@ -553,11 +553,11 @@ class TGraphVX(TUNGraph):
         # number of iterations has passed
         logger.debug('in __SolveADMM (4)')
         pool = multiprocessing.Pool(num_processors)
-        logger.info('n_processes', num_processors)
+        logger.info(f'n_processes {num_processors}')
         while num_iterations <= maxIters:
             iter_start = time.time()
             # Check convergence criteria
-            logger.info('num iters :', num_iterations)
+            logger.info(f'num iters :  {num_iterations}')
             if num_iterations != 0:
                 start = time.time()
                 out3 = \
@@ -571,7 +571,7 @@ class TGraphVX(TUNGraph):
                            rc_tups_col_sorted,
                            num_processors)
                 total3 = time.time() - start
-                logger.info(f'convergence check time: {total3}', )
+                logger.info(f'convergence check time: {total3}' )
 
                 stop, res_pri, e_pri, res_dual, e_dual = out3
                 if stop:
@@ -1301,8 +1301,8 @@ def driver(pool, nz_rc_count, p, n,
     if verbose:
         # Debugging information to print convergence criteria values
         logger.info(f'   res_pri: {res_pri}')
-        logger.info('  e_pri: {}', e_pri)
-        logger.info('  res_dual: {}', res_dual)
-        logger.info('  e_dual: {}', e_dual)
+        logger.info(f'  e_pri: { e_pri}',)
+        logger.info(f'  res_dual: {res_dual}')
+        logger.info(f'  e_dual: {e_dual}')
     stop = (res_pri <= e_pri) and (res_dual <= e_dual)
     return stop, res_pri, e_pri, res_dual, e_dual

@@ -252,7 +252,8 @@ if args.all_seq_clust:
 
 logger.info(f"Beginning generation of covariance"
             f" matrices for clusters 1..{args.n_clusters}")
-logger.info('final cluster sizes : {}', [len(c) for c in clusters.values()])
+szs = [len(c) for c in clusters.values()]
+logger.info(f'final cluster sizes : {szs}', )
 cov_mats = [CovarianceMatrix(c, pseudoc=1, shrink=args.shrink)
             for c in clusters.values()]
 logger.info(f"finished generation of covariance matrices for clusters")

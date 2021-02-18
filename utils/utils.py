@@ -1,11 +1,12 @@
 import numpy as np
 import os
 from sklearn.gaussian_process import GaussianProcessRegressor
-
+import logging
+logger = logging.getLogger(__name__)
 
 def parse_sequence(seq_path):
     if not os.path.exists(seq_path):
-        print(f'path to sequence {seq_path} does not exist!')
+        logger.error(f'path to sequence {seq_path} does not exist!')
     with open(seq_path, 'r+') as f:
         for x in f:
             if x.startswith('>'):
@@ -22,7 +23,7 @@ def display_message(msg, priority=1, verbosity=1, verbose=1):
 
 def load_npy(path):
     if not os.path.exists(path):
-        print(f'data path {path} does not exist')
+        logger.error(f'data path {path} does not exist')
     data = np.load(path, allow_pickle=True)
     try:
         data = data.item()
@@ -113,23 +114,20 @@ def contact_norms(arr, k=21):
     return ns
 
 
-def precision(predicted, native, min_sep=6, max_sep=None, top=None):
+def precision(predicted, native, min_sep=6, max_sep=None, top=None, cutoff = 8):
     if not top:
         top = [1, 2, 5, 10, 25, 50, 100]
     mat = np.copy(predicted)
     mat[np.tril_indices(len(mat), min_sep)] = 0
     max_sep = max_sep or len(mat)
     mat[np.triu_indices(len(mat),max_sep)]=0
-    print('min/max', np.min(mat), np.max(mat))
     if len(mat[mat!=0])==0:
         return None
     native_contacts = np.zeros(native.shape)
-    native_contacts[native <= 8] = 1
-    #print(len(native_contacts[native_contacts == 0]))
+    native_contacts[native <= cutoff] = 1
     precision = []
     for t in top:
         predicted_msk = get_contact_mask(mat, t)
-        #print(len(predicted_msk[predicted_msk > 0]), t)
         precision.append(np.sum(predicted_msk * native_contacts) / t)
     return {t:p for t,p in zip(top,precision)}
 

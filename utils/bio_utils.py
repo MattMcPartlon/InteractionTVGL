@@ -5,6 +5,8 @@ import lazy_property
 import numpy as np
 
 from utils.msa_utils import CalcSeqWeight
+import logging
+logger = logging.getLogger(__name__)
 
 AA_alphabet = "ARNDCQEGHILKMFPSTWYV-"
 AA_index_map = {aa: i for i, aa in enumerate(AA_alphabet)}
@@ -134,10 +136,9 @@ def CovarianceMatrix(seqs, pseudoc=0, shrink=False, weight_seqs = True):
                         val = pab[a][b] - pa[i][a] * pa[j][b]
                         cov_mat[i * 21 + a][j * 21 + b] = val
                         cov_mat[j * 21 + b][i * 21 + a] = val
-    print('n entries in cov mat :', cov_mat.shape[0] ** 2)
-    print('n elts != median', len(cov_mat[cov_mat != np.median(cov_mat)]))
-    print('min/max element ', np.min(cov_mat), np.max(cov_mat))
-    print('quantiles ', np.quantile(cov_mat, q=np.linspace(0, 1, 10)))
+    logger.info(f'n entries in cov mat :, {cov_mat.shape[0] ** 2}')
+    logger.info(f'min/max element , {np.min(cov_mat)}, {np.max(cov_mat)}')
+    logger.info(f'quantiles , {np.quantile(cov_mat, q=np.linspace(0, 1, 10))}')
 
     return cov_mat if not shrink else shrink_cov_mat(cov_mat, wt=alignment.wt)
 

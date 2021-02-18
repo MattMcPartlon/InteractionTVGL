@@ -25,7 +25,6 @@ def get_seq(target_seq_path):
     assert os.path.exists(target_seq_path)
     with open(target_seq_path, 'r+') as f:
         for x in f:
-            print(x)
             if x.startswith('>'):
                 continue
             else:
@@ -34,7 +33,7 @@ def get_seq(target_seq_path):
     return target_seq
 
 
-def process_precision_result(idx, results_root=None, ground_truth_root=None, seq_root=None):
+def process_precision_result(idx, results_root, ground_truth_root, seq_root):
     fams, names = get_fams_and_names(results_root)
     precision_data = defaultdict(list)
     uid = 0
@@ -53,15 +52,16 @@ def process_precision_result(idx, results_root=None, ground_truth_root=None, seq
         return
     if len(precision_mats) == 0:
         return
-    if not isinstance(precision_mats, np.ndarray):
-        return
+    s1s = []
     for j, theta in enumerate(precision_mats):
+        if theta is None:
+            return
         np.fill_diagonal(theta, 0)
         nz = len(theta[theta != 0])
         if nz == 0:
             return
         ps.append(contact_norms(theta))
-        s1 = get_sparsity(theta)
+        s1s.append(get_sparsity(theta))
         theta[np.abs(theta) < 0.1 * 1e-3] = 0
 
     final = 'final' in name or 'clusters' not in predicted_data
@@ -75,7 +75,7 @@ def process_precision_result(idx, results_root=None, ground_truth_root=None, seq
                     target_clust = True
             s2 = get_sparsity(p, thresh=0.1)
             pr = precision(p, ds, min_sep=m - 1, max_sep=M + 1 if M is not None else M)
-            precision_data[name].append([ty, name, m, M, pr, L, i, uid, name, s1, s2, target_clust, final])
+            precision_data[name].append([ty, name, m, M, pr, L, i, uid, name, s1s[i], s2, target_clust, final])
 
     for m, M in zip([5, 9, 12, 24], [None, None, None, None]):
         ty = 'TOP_L'
@@ -87,15 +87,15 @@ def process_precision_result(idx, results_root=None, ground_truth_root=None, seq
             s2 = get_sparsity(p, thresh=0.1)
             top = [L, L // 2, L // 5, L // 10]
             pr = precision(p, ds, min_sep=m - 1, max_sep=M + 1 if M is not None else M, top=top)
-            precision_data[name].append([ty, name, m, M, pr, L, i, uid, name, s1, s2, target_clust, final])
-
+            precision_data[name].append([ty, name, m, M, pr, L, i, uid, s1s[i], s2, target_clust, final])
     return precision_data
 
 
 def process_results_root(results_root, ground_truth_root, seq_root, save_f):
     n_files = len(os.listdir(results_root))
     n_workers = n_files // 2
-    f = partial(process_precision_result, ground_truth_root=ground_truth_root,
+    print('processing result root :',results_root)
+    f = partial(process_precision_result, results_root=results_root, ground_truth_root=ground_truth_root,
                 seq_root=seq_root)
     if not os.path.exists(save_f):
         with Pool(n_workers) as p:
@@ -107,6 +107,7 @@ def process_results_root(results_root, ground_truth_root, seq_root, save_f):
                     all_data[name] = dat[name]
         np.save(save_f, all_data)
 
+
 """
 Process results - for each data file, we write the precision information
 of contact prediction obtained from the sample precision matrix.
@@ -117,6 +118,7 @@ if __name__ == '__main__':
     ground_truth = sys.argv[2]
     seq_root = sys.argv[3]
     save_root = sys.argv[4]
+    print('data root',data_root)
 
     for data in os.listdir(data_root):
         print('processing :', data)
@@ -128,18 +130,18 @@ if __name__ == '__main__':
             print('not a results folder')
             continue
         if 'output' not in os.listdir(os.path.join(data_root, data)):
-            print('no output folder')
-            continue
+            if 'results' not in os.listdir(os.path.join(data_root, data)):
+                print('no results folder')
+                continue
+            else:
+                ext = 'results'
         else:
             ext = 'output'
-        if 'results' not in os.listdir(os.path.join(data_root, data)):
-            print('no results folder')
-            continue
-        else:
-            ext = 'results'
+
         data_dir = os.path.join(data_root, data, ext)
         if len(os.listdir(data_dir)) > CUTOFF:
             save_f = os.path.join(save_root, data + '.npy')
-            process_results_root(results_root=data_dir, ground_truth_root=ground_truth, seq_root=seq_root, save_f=save_f)
+            process_results_root(results_root=data_dir, ground_truth_root=ground_truth, seq_root=seq_root,
+                                 save_f=save_f)
         else:
             print('too few results')
