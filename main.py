@@ -26,7 +26,7 @@ parser.add_argument('-u', '--prec_thresh',
                     default=1e-3)
 parser.add_argument('-t', '--cluster_type',
                     help="Method to use for clustering sequences in MSA",
-                    choices=['phylo', 'cdhit','random'],
+                    choices=['phylo', 'cdhit', 'random'],
                     default='phylo')
 parser.add_argument('-e', '--phylo_path',
                     help='Path to phylogenetic tree file for MSA. If the file in'
@@ -117,6 +117,16 @@ parser.add_argument('-r', '--save_cov_mats',
                     choices=[0, 1],
                     type=int,
                     default=0)
+parser.add_argument('-j', '--max_trial_runs',
+                    help="maximum number of runs to adjust parameters - parameters"
+                         "are adjusted after each trial run so that the sparsity of"
+                         "the returned precision matrices match with --target_sparsity",
+                    type=int,
+                    default=10)
+parser.add_argument('-k', '--log_file',
+                    help="file to write logging information to (defaults to results directory)",
+                    type=str,
+                    default='')
 parser.add_argument('-v', '--verbose',
                     help='level of verbosity : prints status/ current iteration of'
                          ' algorithm, time taken to complete admm steps',
@@ -136,6 +146,20 @@ if int(_n_threads) > 0:
     # os.environ["NUMEXPR_NUM_THREADS"] = _n_threads  # export NUMEXPR_NUM_THREADS=6
 
 # have to import after setting number of threads
+import logging
+ptn_name = args.target_seq.split('/')[-1].split('.')[0]
+log_file = args.log_file or os.path.join(args.output_dir, f'{ptn_name}_error_log.log')
+log_dir = os.path.dirname(log_file)
+if not os.path.exists(log_dir):
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except:
+        pass
+
+logging.basicConfig(filename=log_file, level=logging.INFO,
+                    format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logger = logging.getLogger(__name__)
+
 from cluster.cd_hit_cluster import *
 from cluster.phylo_cluster import gen_phylo_clusters
 import TVGL_Interaction
@@ -148,6 +172,8 @@ import multiprocessing
 from utils.bio_utils import CovarianceMatrix
 from cluster.random_cluster import random_partition
 
+
+
 target_sparsity = args.target_sparsity
 penalty = PenaltyType.L1
 
@@ -157,26 +183,24 @@ beta = args.beta
 
 if len(args.lamb) > 1:
     if len(args.lamb) != args.n_clusters:
-        print('lambda values must be specified for'
-              ' each sample covariance matrix')
-        print(f'got --lamb : {args.lamb}, and '
-              f'--n_clusters : {args.n_clusters}')
+        logger.error('lambda values must be specified for'
+                     ' each sample covariance matrix')
+        logger.error(f'got --lamb : {args.lamb}, and '
+                     f'--n_clusters : {args.n_clusters}')
         sys.exit(1)
 else:
     lamb = args.lamb * args.n_clusters
 
 if len(args.beta) > 1:
     if len(args.lamb) != args.n_clusters - 1:
-        print('beta values must be specified for each pair'
-              ' of sample covariance matrix')
-        print(f'got --lamb : {args.lamb}, and --n_clusters '
-              f': {args.n_clusters}, => n_pairs'
-              f' : {args.n_clusters - 1}')
+        logger.error('beta values must be specified for each pair'
+                     ' of sample covariance matrix')
+        logger.error(f'got --lamb : {args.lamb}, and --n_clusters '
+                     f': {args.n_clusters}, => n_pairs'
+                     f' : {args.n_clusters - 1}')
         sys.exit(1)
 else:
     beta = args.beta * (args.n_clusters - 1)
-
-ptn_name = args.target_seq.split('/')[-1].split('.')[0]
 
 # Set up output directories
 os.makedirs(args.output_dir, exist_ok=True)
@@ -185,10 +209,8 @@ if args.phylo_path:
 
 target_seq = parse_sequence(args.target_seq)
 
-
-display_message(f"Beginning clustering of protein"
-                f" sequences using method {args.cluster_type}",
-                1, args.verbose)
+logger.info(f"Beginning clustering of protein"
+            f" sequences using method {args.cluster_type}")
 if args.cluster_path:
     clusters = {i: clust for i, clust in enumerate(load_npy(args.cluster_path))}
     args.n_clusters = len(clusters)
@@ -205,16 +227,14 @@ else:
                                       dist_path=args.dist_path,
                                       out=args.phylo_path,
                                       verbose=args.verbose)
-    else :#random
+    else:  # random
         clusters = random_partition(args.aln, n_to_clust)
 
-
-display_message("finished clustering of protein sequences...",
-                1, args.verbose)
+logger.info("finished clustering of protein sequences...")
 
 n_seqs = sum(len(c) for c in clusters.values())
-display_message(f"generated {len(clusters)} clusters"
-                f" from {n_seqs} sequences", 1, args.verbose)
+logger.info(f"generated {len(clusters)} clusters"
+            f" from {n_seqs} sequences")
 
 n_cpus = multiprocessing.cpu_count()
 n_processors = n_cpus if args.max_processors < 0 else args.max_processors
@@ -230,89 +250,90 @@ if args.all_seq_clust:
         temp[i + 1] = clust
     clusters = temp
 
-display_message(f"Beginning generation of covariance"
-                f" matrices for clusters 1..{args.n_clusters}",
-                1, args.verbose)
-print('final cluster sizes :', [len(c) for c in clusters.values()])
+logger.info(f"Beginning generation of covariance"
+            f" matrices for clusters 1..{args.n_clusters}")
+logger.info('final cluster sizes : {}', [len(c) for c in clusters.values()])
 cov_mats = [CovarianceMatrix(c, pseudoc=1, shrink=args.shrink)
             for c in clusters.values()]
-display_message(f"finished generation of covariance"
-                f" matrices for clusters", 1, args.verbose)
+logger.info(f"finished generation of covariance matrices for clusters")
 
 prev_lambs, prev_betas = [], []
 stop = False
-MAX_TRIES = 8
+MAX_TRIES = args.max_trial_runs
 prev_sparsities = []
 rfacts = [0] * len(clusters)
-target_sparsity += 0.002 #add tol bc final run produces more sparse output
+target_sparsity += 0.002  # add tol bc final run produces more sparse output
 
-print(f'using lambda : {lamb}, and beta {beta}')
-for i in range(MAX_TRIES):
-    importlib.reload(TVGL_Interaction)
-    importlib.reload(multiprocessing)
-    importlib.reload(np)
-    start = time.time()
-    sp = os.path.join(args.output_dir, f"{ptn_name}_{i}.npy")
-    assert os.path.exists(os.path.dirname(sp))
-    params_converged = False
-    print('lam,', lamb, 'beta', beta)
-    if len(prev_sparsities) > 0:
-        sparsity_diff = np.abs(np.array(prev_sparsities[-1]) - target_sparsity)
-        params_converged = np.alltrue(sparsity_diff < 0.3 * 1e-2)
-        # lam_diff = np.array(lamb)-np.array(prev_lambs[-1])
-        # params_converged = params_converged or np.alltrue(np.abs(lam_diff)<1e-5)
-    if params_converged or i == MAX_TRIES - 1:
-        theta_set = TVGL(np.copy(cov_mats),
-                         n_processors=n_processors,
-                         lamb=lamb,
-                         beta=beta,
-                         indexOfPenalty=penalty,
-                         max_iters=150,
-                         verbose=True)
-        stop = True
-        sp = os.path.join(args.output_dir, f"{ptn_name}_final.npy")
-    else:
-        theta_set = TVGL(np.copy(cov_mats),
-                         n_processors=n_processors,
-                         lamb=lamb,
-                         beta=beta,
-                         max_iters=args.max_iters,
-                         indexOfPenalty=penalty,
-                         verbose=True)
-    display_message(f'finished generating precision matrices.'
-                    f' time : {(time.time() - start)} s',
-                    1,
-                    args.verbose)
-    data = {'theta set': theta_set,
-            'clusters': clusters,
-            'lam': lamb,
-            'beta': beta,
-            'seq': target_seq,
-            'args': args.__dict__}
-    if args.save_cov_mats:
-        data['cov_mats'] = cov_mats
-    if args.save_intermediate or stop:
-        np.save(sp, data)
-    display_message(f"finished tvgl", 1, args.verbose)
+try:
+    for i in range(MAX_TRIES):
+        importlib.reload(TVGL_Interaction)
+        importlib.reload(multiprocessing)
+        importlib.reload(np)
+        start = time.time()
+        sp = os.path.join(args.output_dir, f"{ptn_name}_{i}.npy")
+        assert os.path.exists(os.path.dirname(sp))
+        params_converged = False
+        if len(prev_sparsities) > 0:
+            sparsity_diff = np.abs(np.array(prev_sparsities[-1]) - target_sparsity)
+            params_converged = np.alltrue(sparsity_diff < 0.4 * 1e-2)
+            params_converged = params_converged and np.alltrue(np.array(prev_sparsities[-1]) - target_sparsity > 0)
+            # lam_diff = np.array(lamb)-np.array(prev_lambs[-1])
+            # params_converged = params_converged or np.alltrue(np.abs(lam_diff)<1e-5)
+        if params_converged or i == MAX_TRIES - 1:
+            theta_set = TVGL(np.copy(cov_mats),
+                             n_processors=n_processors,
+                             lamb=lamb,
+                             beta=beta,
+                             indexOfPenalty=penalty,
+                             max_iters=150,
+                             verbose=True)
+            stop = True
+            sp = os.path.join(args.output_dir, f"{ptn_name}_final.npy")
+        else:
+            theta_set = TVGL(np.copy(cov_mats),
+                             n_processors=n_processors,
+                             lamb=lamb,
+                             beta=beta,
+                             max_iters=args.max_iters,
+                             indexOfPenalty=penalty,
+                             verbose=True)
+        logger.info(f'finished generating precision matrices.'
+                    f' time : {(time.time() - start)} s')
+        data = {'theta set': theta_set,
+                'clusters': clusters,
+                'lam': lamb,
+                'beta': beta,
+                'seq': target_seq,
+                'args': args.__dict__}
+        if args.save_cov_mats:
+            data['cov_mats'] = cov_mats
+        if args.save_intermediate or stop:
+            np.save(sp, data)
+        logger.info(f"finished tvgl")
 
-    l, b, s = adjust_lam_and_beta(theta_set,
-                                  lamb,
-                                  beta,
-                                  prev_sparsities,
-                                  prev_lambs,
-                                  prev_betas,
-                                  target_sparsity=target_sparsity,
-                                  thresh=args.prec_thresh)
+        l, b, s = adjust_lam_and_beta(theta_set,
+                                      lamb,
+                                      beta,
+                                      prev_sparsities,
+                                      prev_lambs,
+                                      prev_betas,
+                                      target_sparsity=target_sparsity,
+                                      thresh=args.prec_thresh)
 
-    prev_lambs.append(list(lamb))
-    prev_betas.append(list(beta))
-    prev_sparsities.append(list(s))
-    lamb, beta = list(l), list(b)
-    display_message(f"previous lambs : {prev_lambs}")
-    display_message(f"previous betas : {prev_betas}")
-    display_message(f"sparsities : {prev_sparsities}")
-    display_message(f"current lamb : {lamb}")
-    display_message(f"current beta : {beta}")
+        prev_lambs.append(list(lamb))
+        prev_betas.append(list(beta))
+        prev_sparsities.append(list(s))
+        lamb, beta = list(l), list(b)
+        logger.info(f"previous lambs : {prev_lambs}")
+        logger.info(f"previous betas : {prev_betas}")
+        logger.info(f"sparsities : {prev_sparsities}")
+        logger.info(f"current lamb : {lamb}")
+        logger.info(f"current beta : {beta}")
 
-    if stop:
-        break
+        if stop:
+            break
+    time.sleep(120)
+except Exception as e:
+    print('caught exception :', e)
+    logger.error(e)
+    raise e

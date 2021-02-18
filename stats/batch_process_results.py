@@ -95,7 +95,7 @@ def process_precision_result(idx, results_root=None, ground_truth_root=None, seq
 def process_results_root(results_root, ground_truth_root, seq_root, save_f):
     n_files = len(os.listdir(results_root))
     n_workers = n_files // 2
-    f = partial(process_precision_result, results_root=results_root, ground_truth_root=ground_truth_root,
+    f = partial(process_precision_result, ground_truth_root=ground_truth_root,
                 seq_root=seq_root)
     if not os.path.exists(save_f):
         with Pool(n_workers) as p:
@@ -107,7 +107,10 @@ def process_results_root(results_root, ground_truth_root, seq_root, save_f):
                     all_data[name] = dat[name]
         np.save(save_f, all_data)
 
-
+"""
+Process results - for each data file, we write the precision information
+of contact prediction obtained from the sample precision matrix.
+"""
 CUTOFF = 15
 if __name__ == '__main__':
     data_root = sys.argv[1]  # pred

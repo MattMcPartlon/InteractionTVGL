@@ -255,3 +255,10 @@ from random import shuffle
 a = [1,2,3,4,5,6]
 shuffle(a)
 print(a)
+
+x = ''
+y = x or 'hello'
+print(y)
+
+x = 'hi {}'
+print(x.format([1,2,3]))

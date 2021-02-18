@@ -34,6 +34,9 @@ import numpy
 from cvxpy import *
 # TGraphVX inherits from the TUNGraph object defined by Snap.py
 from snap.snap import TUNGraph
+import logging
+logger = logging.getLogger(__name__)
+
 
 # global vars
 TYPE = 0
@@ -242,7 +245,7 @@ class TGraphVX(TUNGraph):
                              Verbose)
             return
         if Verbose:
-            print('Serial ADMM')
+            logger.info('Serial ADMM')
         objective = 0
         constraints = []
         # Add all node objectives and constraints
@@ -395,9 +398,8 @@ class TGraphVX(TUNGraph):
         global shr_node_vals, shr_edge_u_vals, shr_edge_z_vals
         global rc_tups_row_sorted, rc_tups_col_sorted, z_old_shr
         rho = 1.0
-        print('in __SolveADMM')
-        if verbose:
-            print('Distributed ADMM (%d processors)' % num_processors)
+        logger.info('in __SolveADMM')
+        logger.info('Distributed ADMM (%d processors)' % num_processors)
         rho = rho_param
         # Organize information for each node in helper node_info structure
         node_info = {}
@@ -435,7 +437,7 @@ class TGraphVX(TUNGraph):
         # Keeps track of the current offset necessary into the shared edge
         # values Arrays
         length = 0
-        print('in __SolveADMM (1)')
+        logger.info('in __SolveADMM (1)')
         # rc_tups = []
 
         for ei in self.Edges():
@@ -466,25 +468,19 @@ class TGraphVX(TUNGraph):
         shr_edge_u_vals = None
         edge_u_vals = multiprocessing.Array('d', [0.0] * length, lock=lock)
         z_length = length
-        print('in __SolveADMM (2)')
+        logger.info('in __SolveADMM (2)')
         # Populate sparse matrix A.
         # A has dimensions (p, n), where p is the length of the stacked vector
         # of node variables, and n is the length of the stacked z vector of
         # edge variables.
         # Each row of A has one 1. There is a 1 at (i,j) if z_i = x_j.
-        print('setting up sparse matrix...')
-        # print(z_length)
-        # print(x_length)
-        # nz_cols = numpy.zeros(z_length).astype(int)
-        # col_norm_buffer = numpy.zeros(x_length)
-
-        # A = lil_matrix((z_length, x_length), dtype=numpy.int8)
+        logger.info('setting up sparse matrix...')
         rs = numpy.zeros(z_length, dtype=numpy.int64)
         col_cts = defaultdict(list)
         min_col, max_col = 1e10, -1e10
-        print('finished setting up sparse matrix')
+        logger.info('finished setting up sparse matrix')
         for ei in self.Edges():
-            print('processing ei', ei)
+            logger.info('processing ei', ei)
             etup = self.__GetEdgeTup(ei.GetSrcNId(), ei.GetDstNId())
             info_edge = edge_info[etup]
             info_i = node_info[etup[0]]
@@ -508,8 +504,8 @@ class TGraphVX(TUNGraph):
                 col_cts[col].append(row)
                 max_col, min_col = max(col, max_col), min(col, min_col)
 
-        print('finished edge processing...')
-        print('sorting row/col information')
+        logger.info('finished edge processing...')
+        logger.info('sorting row/col information')
         # sort these tuples on column
 
         _rc_tups_col_sorted = numpy.zeros(2 * len(rs), dtype=numpy.int64)
@@ -523,8 +519,8 @@ class TGraphVX(TUNGraph):
         nz_rc_count = len(rs)
         rc_tups_row_sorted = multiprocessing.Array(c_int64, len(rs), lock=lock)
         rc_tups_col_sorted = multiprocessing.Array(c_int64, len(_rc_tups_col_sorted), lock=False)
-        print('finished sorting row/col information')
-        print('writing values')
+        logger.info('finished sorting row/col information')
+        logger.info('writing values')
         writeValue(rc_tups_col_sorted, 0, _rc_tups_col_sorted, len(_rc_tups_col_sorted))
         writeValue(rc_tups_row_sorted, 0, rs, len(rs))
 
@@ -533,7 +529,7 @@ class TGraphVX(TUNGraph):
         # Create final node_list structure by adding on information for
         # node neighbors
         node_list = []
-        print('in __SolveADMM (3)')
+        logger.debug('in __SolveADMM (3)')
         for nid, info in node_info.items():
             entry = [nid, info[X_OBJ], info[X_VARS], info[X_CON], info[X_IND],
                      info[X_LEN], info[X_DEG]]
@@ -555,15 +551,14 @@ class TGraphVX(TUNGraph):
 
         # Proceed until convergence criteria are achieved or the maximum
         # number of iterations has passed
-        print('in __SolveADMM (4)')
+        logger.debug('in __SolveADMM (4)')
         pool = multiprocessing.Pool(num_processors)
-        print('n_processes', num_processors)
+        logger.info('n_processes', num_processors)
         while num_iterations <= maxIters:
             iter_start = time.time()
             # Check convergence criteria
-            print('num iters :', num_iterations)
+            logger.info('num iters :', num_iterations)
             if num_iterations != 0:
-                # print('checking convergence...')
                 start = time.time()
                 out3 = \
                     driver(pool,
@@ -576,7 +571,7 @@ class TGraphVX(TUNGraph):
                            rc_tups_col_sorted,
                            num_processors)
                 total3 = time.time() - start
-                print('convergence check :', total3)
+                logger.info(f'convergence check time: {total3}', )
 
                 stop, res_pri, e_pri, res_dual, e_dual = out3
                 if stop:
@@ -591,18 +586,18 @@ class TGraphVX(TUNGraph):
 
             if verbose:
                 # Debugging information prints current iteration #
-                print('Iteration %d' % num_iterations)
+                logger.info(f'Iteration {num_iterations}')
             start = time.time()
             pool.map(ADMM_x, node_list)
-            print('finished admm x :', time.time() - start)
+            logger.info(f'finished admm x : {time.time() - start}')
             start = time.time()
             pool.map(ADMM_z, edge_list)
-            print('finished admm z :', time.time() - start)
+            logger.info(f'finished admm z : {time.time() - start}')
             start = time.time()
             pool.map(ADMM_u, edge_list)
-            print('finished admm u :', time.time() - start)
+            logger.info(f'finished admm u : {time.time() - start}')
 
-            print('total iteration time :', time.time() - iter_start)
+            logger.info(f'total iteration time : {time.time() - iter_start}')
         pool.close()
         pool.join()
 
@@ -648,6 +643,7 @@ class TGraphVX(TUNGraph):
     # Helper method to verify existence of an NId.
     def __VerifyNId(self, NId):
         if not TUNGraph.IsNode(self, NId):
+            logger.error(f'Node {NId} does not exist.')
             raise Exception('Node %d does not exist.' % NId)
 
     # Helper method to determine if
@@ -660,6 +656,7 @@ class TGraphVX(TUNGraph):
         # in other Objectives.
         new_variables = set(Objective.variables())
         if builtins.len(self.all_variables.intersection(new_variables)) != 0:
+            logger.error(f'Objective at NId {NId} shares a variable.')
             raise Exception('Objective at NId %d shares a variable.' % NId)
         self.all_variables = self.all_variables | new_variables
 
@@ -940,19 +937,10 @@ class TGraphVX(TUNGraph):
 
 # Proximal operators
 def Prox_logdet(S, A, eta):
-    # print('in prox log det,',os.getpid())
-    # print('in prox_logdet!', os.getpid())
-    # print('m=m.t?',numpy.array_equal(m, m.T))
-    # print('starting wait...')
-    # time.sleep(numpy.random.uniform(0,1e-3))
-    # this is the time-consuming part
     d, q = numpy.linalg.eigh(eta * A - S)
-    # q = numpy.matrix(q)
     X_var = (1 / (2 * eta)) * q * (numpy.diag(d + numpy.sqrt(numpy.square(d) + (4 * eta)))) * q.T
     x_var = X_var[numpy.triu_indices(S.shape[1])]  # extract upper triangular part as update variable
-    #        print 'x_update = ',x_var
-    # print('finished prox_log_det',os.getpid())
-    return x_var  # numpy.matrix(x_var).T
+    return x_var
 
 
 def Prox_lasso(a_ij, a_ji, eta, NID_diff):
@@ -1010,7 +998,6 @@ def Prox_penalty(a_ij, a_ji, eta, index_penalty):
     else:
         A_ij = upper2Full(a_ij)
         A_ji = upper2Full(a_ji)
-        #        print A_2 - A_ji
         if index_penalty == 2:
             e = Prox_twonorm(A_ij - A_ji + d, alpha * eta) - d
         elif index_penalty == 4:
@@ -1142,22 +1129,15 @@ def ADMM_z(entry):
                 flag = 1
             else:
                 a_ji += (x_j + u_ji)
-        #
-        #    z_ij = numpy.zeros(a_ij.shape)
-        #    z_ji = numpy.zeros(a_ij.shape)
         NID_diff = entry[0][1] - entry[0][0]
-        #    print 'entry[0] = ', entry[0], 'NID_diff = ' ,NID_diff
-        #    eta = 2*entry[1].args[0].value/rho
-        #    print 'alpha/beta = ', entry[1].args[0].value
+
         eta = entry[1].args[
                   0].value / rho  # where entry[1].args[0].value can be alpha or bete depending on NID_diff
 
         if numpy.abs(NID_diff) <= 1:  # for psi penalty edge
             #        beta = entry[1].args[0].value
             [z_ij, z_ji] = Prox_penalty(a_ij, a_ji, eta, TYPE)
-        #        print 'we are in psi penalty edge, beta = ', entry[1].args[0].value
         else:
-            #        print 'we are in lasso penalty edge, alpha = ', entry[1].args[0].value
             [z_ij, z_ji] = Prox_lasso(a_ij, a_ji, eta, NID_diff)
 
         if NID_diff >= -1:
@@ -1167,7 +1147,6 @@ def ADMM_z(entry):
             writeValue(edge_z_vals, entry[Z_ZJIIND] + variables_j[0][3], z_ji, variables_j[0][2].size[0],
                        )
     #    -----------------------Proximal operator ---------------------------
-    #    print 'end of proximal operator'
     #
     # ----------------------- Use CVXPY  -----------------------------
     else:
@@ -1188,7 +1167,6 @@ def ADMM_z(entry):
         objective = m_func(objective + (rho / 2) * norms)
         problem = Problem(objective, constraints)
 
-        #    print 'here 3'
         try:
             problem.solve()
         except SolverError:
@@ -1246,7 +1224,6 @@ def A_tr_norms(*args):
     u = numpy.frombuffer(edge_u_vals)
     s, e = args
     rc_tups_col_sorted_ = numpy.frombuffer(rc_tups_col_sorted, dtype=numpy.int64)[2 * s:2 * e]
-    # print('time to load rc_tups col sorted :',time.time()-start)
     col_norm_buffer = numpy.zeros(rc_tups_col_sorted_[-1] - rc_tups_col_sorted_[1] + 1)
     offset = rc_tups_col_sorted_[-1]
     # calculate dual residual
@@ -1323,9 +1300,9 @@ def driver(pool, nz_rc_count, p, n,
     e_dual = math.sqrt(n) * e_abs + e_rel * Atr_u_norm + .0001
     if verbose:
         # Debugging information to print convergence criteria values
-        print('  res_pri:', res_pri)
-        print('  e_pri:', e_pri)
-        print('  res_dual:', res_dual)
-        print('  e_dual:', e_dual)
+        logger.info(f'   res_pri: {res_pri}')
+        logger.info('  e_pri: {}', e_pri)
+        logger.info('  res_dual: {}', res_dual)
+        logger.info('  e_dual: {}', e_dual)
     stop = (res_pri <= e_pri) and (res_dual <= e_dual)
     return stop, res_pri, e_pri, res_dual, e_dual
