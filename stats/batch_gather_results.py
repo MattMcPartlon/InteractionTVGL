@@ -53,16 +53,33 @@ def process_precision_result(idx, results_root, ground_truth_root, seq_root):
     if len(precision_mats) == 0:
         return
     s1s = []
+    if not isinstance(precision_mats,np.ndarray):
+        precision_mats = np.array(precision_mats)
+    if len(precision_mats.shape)==2:
+        precision_mats=precision_mats.reshape((-1,precision_mats.shape[0],precision_mats.shape[1]))
+    wts = np.ones(len(precision_mats))/len(precision_mats)
+    if 'clusters' in predicted_data:
+        sizes = []
+        clusters = predicted_data['clusters']
+        for c in clusters:
+            sizes.append(len(c))
+        wts = np.array(sizes)/np.sum(sizes)
+    mean_prec = np.sum([x*w for x,w in zip(precision_mats,wts)])
+    precision_mats = [x for x in precision_mats]
+    precision_mats.append(mean_prec)
     for j, theta in enumerate(precision_mats):
         if theta is None:
             return
-        np.fill_diagonal(theta, 0)
+        theta[np.abs(theta) < 0.1 * 1e-3] = 0
         nz = len(theta[theta != 0])
         if nz == 0:
             return
+        vs = theta[np.triu_indices(len(theta),21*2)]
+        prec_arr = np.zeros(theta.shape)
+        prec_arr[np.triu_indices(len(theta), 21 * 2)] = vs
+        prec_arr+=prec_arr.T
         ps.append(contact_norms(theta))
         s1s.append(get_sparsity(theta))
-        theta[np.abs(theta) < 0.1 * 1e-3] = 0
 
     final = 'final' in name or 'clusters' not in predicted_data
     # compute precision for 5,10,23, sep
@@ -75,7 +92,11 @@ def process_precision_result(idx, results_root, ground_truth_root, seq_root):
                     target_clust = True
             s2 = get_sparsity(p, thresh=0.1)
             pr = precision(p, ds, min_sep=m - 1, max_sep=M + 1 if M is not None else M)
-            precision_data[name].append([ty, name, m, M, pr, L, i, uid, name, s1s[i], s2, target_clust, final])
+            if i == len(ps)-1:
+                precision_data[name].append([ty, name, m, M, pr, L, i, uid, name, s1s[i], s2, target_clust, final,True])
+            else:
+                precision_data[name].append([ty, name, m, M, pr, L, i, uid, name, s1s[i], s2, target_clust, final,False])
+
 
     for m, M in zip([5, 9, 12, 24], [None, None, None, None]):
         ty = 'TOP_L'
@@ -87,7 +108,13 @@ def process_precision_result(idx, results_root, ground_truth_root, seq_root):
             s2 = get_sparsity(p, thresh=0.1)
             top = [L, L // 2, L // 5, L // 10]
             pr = precision(p, ds, min_sep=m - 1, max_sep=M + 1 if M is not None else M, top=top)
-            precision_data[name].append([ty, name, m, M, pr, L, i, uid, s1s[i], s2, target_clust, final])
+            if i == len(ps) - 1:
+                precision_data[name].append([ty, name, m, M, pr, L, i, uid, s1s[i], s2, target_clust, final,True])
+            else:
+                precision_data[name].append([ty, name, m, M, pr, L, i, uid, s1s[i], s2, target_clust, final,False])
+
+
+
     return precision_data
 
 

@@ -239,7 +239,7 @@ def simple_gpr_inverse(xs,ys,target,s=1e-6,e=1e-2):
 
 
 
-
+from utils.utils import gpr_inverse
 
 for i in range(len(previous_lambs)-2):
     l,s = previous_lambs[:i+2], sparsities[:i+2]
@@ -248,7 +248,7 @@ for i in range(len(previous_lambs)-2):
     #l,pred = gp_reg(l,s,0.03)
 
     #print('output',np.round(l,6),np.round(pred,4))
-    print(simple_gpr_inverse(l,s,0.03))
+    print(gpr_inverse(np.array(l),np.array(s),0.03))
     print()
 
 from random import shuffle
@@ -272,4 +272,7 @@ def ncr(n, r):
     denom = reduce(op.mul, range(1, r+1), 1)
     return numer // denom  # or / in Python 2
 
-print(ncr(10,5)*ncr(5,3))
+a,b = np.ones((10,10)),np.ones((10,10))*2
+print(np.sum([a,b],axis = 0))
+
+

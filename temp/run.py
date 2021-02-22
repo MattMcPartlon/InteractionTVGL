@@ -1,28 +1,47 @@
 import os
 import subprocess
 import sys
-import numpy as np
+import time
+
 s,e = int(sys.argv[1]),int(sys.argv[2])
+max_running = e-s+1
+if len(sys.argv)>3:
+    max_running = int(sys.argv[3])
 count = 0
+cmds = []
 with open('args.txt', 'r+') as f:
     for i,x in enumerate(f):
         count+=1
+        cmds.append(x)
 
-idxs = np.arange(e-s).astype(int)+s
-with open('args.txt', 'r+') as f:
-    for i,x in enumerate(f):
-        if i in idxs:
-            #make directory for output
-            if '>' in x:
-                out_file = x.strip().split('>')[-1]
-                if out_file.endswith('&'):
-                    out_file=out_file[:-1]
-                out_dir = os.path.dirname(out_file)
-                try:
-                    os.makedirs(out_dir, exist_ok=True)
-                except:
-                    pass
+processes = []
+cmds = cmds[s:e+1]
+for x in cmds:
+    if len(processes)<max_running:
+        #make directory for output
+        if '>' in x:
+            out_file = x.strip().split('>')[-1]
+            if out_file.endswith('&'):
+                out_file=out_file[:-1]
+            out_dir = os.path.dirname(out_file)
+            try:
+                os.makedirs(out_dir, exist_ok=True)
+            except:
+                pass
 
-            cmd = f'python /home/mmcpartlon/InteractionTVGL/main.py {x.strip()} '
-            print(f'running : {cmd}')
-            subprocess.call(cmd, shell = True)
+        cmd = f'nohup python /home/mmcpartlon/InteractionTVGL/main.py {x.strip()} '
+        print(f'running : {cmd}')
+        p = subprocess.Popen(cmd, shell = True)
+        processes.append(p)
+    else:
+        while True:
+            to_rem = []
+            for i,p in enumerate(processes):
+                if p.poll() is not None:
+                    #process finished:
+                    to_rem.append(i)
+            if len(to_rem)>0:
+                processes = [processes[i] for i in range(len(processes)) if i not in to_rem]
+                break
+            time.sleep(20)
+

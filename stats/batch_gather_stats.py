@@ -6,8 +6,8 @@ from functools import partial
 import numpy as np
 import pandas as pd
 
-# target : [ty, name, m, M, pr, L, i, uid s1, s2, target_clust, final]
-TY, NAME, m, M, PREC, SEQ_LEN, IDX, UID, S1, S2, TARGET_CLUST, FINAL = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
+# target : [ty, name, m, M, pr, L, i, uid s1, s2, target_clust, final,AVG]
+TY, NAME, m, M, PREC, SEQ_LEN, IDX, UID, S1, S2, TARGET_CLUST, FINAL, AVG = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12
 
 # top scoring prediction rank by average precision for top n predicted contacts
 # seps 5-9, 10-23, >23
@@ -45,7 +45,10 @@ def filter_target_clust(entry, min_sparsity=0, max_sparsity=1, *args, **kwargs):
 def filter_not_first_or_target(entry, min_sparsity=0, max_sparsity=1, *args, **kwargs):
     t1 = filter_first_clust(entry, min_sparsity, max_sparsity)
     t2 = filter_target_clust(entry, min_sparsity, max_sparsity)
-    return (not t1) and (not t2)
+    return (not t1) and (not t2) and not entry[AVG]
+
+def filter_avg(entry):
+    return entry[AVG]
 
 
 def filter_top(entry, ty='TOP_L', *args, **kwargs):
@@ -138,13 +141,14 @@ print(methods)
 _header = 'method,target,seq len, msa depth, meff, cluster type,s1,s2, min sep, max sep, data type'
 _header = [x.strip() for x in _header.split(',')]
 
-types = ['ALL', 'FIRST', 'TARGET', 'NOT FIRST OR TARGET']
+types = ['ALL', 'FIRST', 'TARGET', 'NOT FIRST OR TARGET', 'AVG']
 data_funcs = [precision_data] * 4
 filter_funcs = [
     lambda *args, **kwargs: True,
     filter_first_clust,
     filter_target_clust,
     filter_not_first_or_target,
+    filter_avg,
 ]
 finals = [True,True,False,False]
 tys = ['TOP_L', 'NORMAL','TOP_L','NORMAL']
@@ -198,8 +202,8 @@ for final,ty in zip(finals,tys):
                         all_data.append(__data_to_add)
     df = pd.DataFrame(all_data)
     print('data length',len(all_data))
-    fl = 'final' if final else ''
-    print(f'sheet name {ty}_{fl}')
+    fl = '_final' if final else ''
+    print(f'sheet name {ty}{fl}')
     data_map[f'{ty}_{fl}'] = (header,df)
 with pd.ExcelWriter(save_path, mode='w+') as writer:
     for name,d in data_map.items():

@@ -160,6 +160,7 @@ logging.basicConfig(filename=log_file, level=logging.INFO,
                     format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
+import traceback
 from cluster.cd_hit_cluster import *
 from cluster.phylo_cluster import gen_phylo_clusters
 import TVGL_Interaction
@@ -264,7 +265,9 @@ MAX_TRIES = args.max_trial_runs
 prev_sparsities = []
 rfacts = [0] * len(clusters)
 target_sparsity += 0.002  # add tol bc final run produces more sparse output
-
+best_lam, best_diff = lamb, 1
+best_g_diff = 1
+idxs = np.array([0])
 try:
     for i in range(MAX_TRIES):
         importlib.reload(TVGL_Interaction)
@@ -275,18 +278,28 @@ try:
         assert os.path.exists(os.path.dirname(sp))
         params_converged = False
         if len(prev_sparsities) > 0:
-            sparsity_diff = np.abs(np.array(prev_sparsities[-1]) - target_sparsity)
-            params_converged = np.alltrue(sparsity_diff < 0.4 * 1e-2)
-            params_converged = params_converged and np.alltrue(np.array(prev_sparsities[-1]) - target_sparsity > 0)
+            prs = np.array(np.array(prev_sparsities[-1])[idxs])
+            sparsity_diff = np.array(np.abs(prs - target_sparsity)[idxs])
+            params_converged = np.alltrue(sparsity_diff < 0.003)
             # lam_diff = np.array(lamb)-np.array(prev_lambs[-1])
             # params_converged = params_converged or np.alltrue(np.abs(lam_diff)<1e-5)
+            if np.max(sparsity_diff)<best_diff:
+                if np.min(prs)>min(0.025,target_sparsity):
+                    best_diff = np.max(sparsity_diff)
+                    best_lam = list(prev_lambs[-1])
+            if np.max(sparsity_diff)<0.005:
+                if np.alltrue(prs>=target_sparsity-0.002):
+                    if best_g_diff>np.max(sparsity_diff):
+                        best_lam = list(prev_lambs[-1])
+                        best_g_diff = np.max(sparsity_diff)
+                        best_diff = 0 #take this lambda as best by default
         if params_converged or i == MAX_TRIES - 1:
             theta_set = TVGL(np.copy(cov_mats),
                              n_processors=n_processors,
-                             lamb=lamb,
+                             lamb=best_lam,
                              beta=beta,
                              indexOfPenalty=penalty,
-                             max_iters=150,
+                             max_iters=120,
                              verbose=True)
             stop = True
             sp = os.path.join(args.output_dir, f"{ptn_name}_final.npy")
@@ -300,18 +313,6 @@ try:
                              verbose=True)
         logger.info(f'finished generating precision matrices.'
                     f' time : {(time.time() - start)} s')
-        data = {'theta set': theta_set,
-                'clusters': clusters,
-                'lam': lamb,
-                'beta': beta,
-                'seq': target_seq,
-                'args': args.__dict__}
-        if args.save_cov_mats:
-            data['cov_mats'] = cov_mats
-        if args.save_intermediate or stop:
-            np.save(sp, data)
-        logger.info(f"finished tvgl")
-
         l, b, s = adjust_lam_and_beta(theta_set,
                                       lamb,
                                       beta,
@@ -331,10 +332,25 @@ try:
         logger.info(f"current lamb : {lamb}")
         logger.info(f"current beta : {beta}")
 
+        data = {'theta set': theta_set,
+                'clusters': clusters,
+                'lam': prev_lambs[-1],
+                'beta': prev_betas[-1],
+                'seq': target_seq,
+                'args': args.__dict__,
+                'sparsity':prev_sparsities[-1]}
+        if args.save_cov_mats:
+            data['cov_mats'] = cov_mats
+        if args.save_intermediate or stop:
+            np.save(sp, data)
+        logger.info(f"finished tvgl")
+
         if stop:
             break
     time.sleep(120)
 except Exception as e:
     print('caught exception :', e)
+    tb = traceback.format_exc()
     logger.error(e)
+    logger.error(tb)
     raise e

@@ -4,16 +4,16 @@ from utils.utils import parse_seqs
 root = '/home/mmcpartlon/suppdata'
 max_to_clust = '3'
 max_workers = '4'
-max_iters = '40'
-save_rt = '/mnt/local/mmcpartlon/results_target_sp_032_beta_0005_phylo_gpr_inv'
+max_iters = '30'
+save_rt = '/mnt/local/mmcpartlon/results_target_sp_032_beta_0005_fix_phylo_gpr_inv_first_only'
 shrink = 0
 scale = 0
 clust = 0 #0 = no clust, #1 : cd hit, #2: random, #3: most similar to target, #4: phylo
 lam = 0.002
 save_int = 1
 beta = .0005
-sp = 0.05
-zero_thresh = 1e-3
+sp = 0.032
+zero_thresh = 1e-2
 clust_ty = 'phylo'
 max_trial_runs = 10
 x = '/mnt/c/Users/mm851/Downloads/interaction_tvgl/suppdata'

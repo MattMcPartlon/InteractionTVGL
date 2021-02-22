@@ -3,7 +3,7 @@ import os
 from sklearn.gaussian_process import GaussianProcessRegressor
 import logging
 logger = logging.getLogger(__name__)
-
+import warnings
 def parse_sequence(seq_path):
     if not os.path.exists(seq_path):
         logger.error(f'path to sequence {seq_path} does not exist!')
@@ -41,7 +41,7 @@ def parse_seqs(aln_path):
     return seqs
 
 
-def adjust_lam_and_beta(theta_set, lam_, beta_, prev_sparsities, prev_lams, prev_betas, target_sparsity, thresh=1e-3, sep=3):
+def adjust_lam_and_beta(theta_set, lam_, beta_, prev_sparsities, prev_lams, prev_betas, target_sparsity, thresh=1e-3, sep=3, first_only = True):
     sparsities = []
     opt = True
     lam = list(lam_)
@@ -56,17 +56,27 @@ def adjust_lam_and_beta(theta_set, lam_, beta_, prev_sparsities, prev_lams, prev
         sparsity_diff = (target_sparsity - sp) #/ target_sparsity
         if abs(sparsity_diff) < 0.2*1e-2 and sparsity_diff < 0:
             continue
-        elif len(prev_lams) < 1:
-            scale = np.random.uniform(1.1,2.5)
+        elif len(prev_lams) <=1:
+            scale = np.random.uniform(1,2.5)
             lam[i] *= scale if sparsity_diff < 0 else 1 / scale
             opt = False
         else:
             opt = False
     if not opt:
-        if len(prev_sparsities) > 0:
+        if len(prev_sparsities) >1:
             ps, pls, bs = list(prev_sparsities), list(prev_lams), list(prev_betas)
             ps.append(sparsities), pls.append(lam), bs.append(beta)
+            if first_only:
+                pls = [[x[0]] for x in pls]
+                ps = [[x[0]] for x in ps]
             lam = gpr_inverse(pls, ps, target_sparsity)
+            if first_only:
+                try:
+                    l = lam[0]
+                    lam = [l]*len(lam_)
+                except:
+                    lam = [lam]*len(lam_)
+
 
     return lam, beta, sparsities
 
@@ -80,11 +90,31 @@ def constant_ratio_beta_context(xs, ratio = 1/4):
     cxt = np.hstack([fst for _ in range(len(tmp[0])-1)]).reshape(-1,len(tmp[0])-1)
     return np.concatenate((tmp,cxt),axis = 1)
 
-def gpr_inverse(xs,ys,target,s=1e-6,e=1e-2):
-    gpr = GaussianProcessRegressor(n_restarts_optimizer=3)
-    gpr.fit(ys,xs)
-    lams = gpr.predict([[target]*len(ys[0])]).ravel()
-    return np.maximum(s,np.minimum(lams,e))
+from sklearn.gaussian_process.kernels import ConstantKernel,WhiteKernel,DotProduct
+
+def get_kernel():
+    k = ConstantKernel(constant_value_bounds=(1e-7, 1e7))*DotProduct(sigma_0_bounds=(1e-7,1e7))
+    k+=WhiteKernel(noise_level_bounds=(1e-7,1e7))
+    return k
+
+
+def gpr_inverse(xs,ys,target,s=1e-7,e=1e-1):
+    try:
+        with warnings.catch_warnings() as w:
+            gpr = GaussianProcessRegressor(n_restarts_optimizer=5, copy_X_train=True, kernel=get_kernel())
+            gpr.fit(ys,xs)
+            tgt = np.array([target]*len(ys[0]))
+            lams = gpr.predict([tgt]).ravel()
+            try:
+                logger.warning(str(w))
+            except:
+                pass
+            return np.maximum(s,np.minimum(lams,e))
+    except Exception as e:
+        logger.error(f'error in gpr inv {e}')
+        return np.array(xs[-1])*np.random.uniform(0.85,1.15,size=len(ys[0]))
+
+
 
 def get_sparsity(arr, thresh=1e-3):
     temp = np.abs(np.copy(arr))
