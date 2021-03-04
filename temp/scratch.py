@@ -238,7 +238,7 @@ def simple_gpr_inverse(xs,ys,target,s=1e-6,e=1e-2):
 
 
 
-
+"""
 from utils.utils import gpr_inverse
 
 for i in range(len(previous_lambs)-2):
@@ -251,6 +251,18 @@ for i in range(len(previous_lambs)-2):
     print(gpr_inverse(np.array(l),np.array(s),0.03))
     print()
 
+
+from utils.utils import fit_lam_inv
+for i in range(len(previous_lambs)-3):
+    l,s = previous_lambs[:i+3], sparsities[:i+3]
+    print('xs',np.round(l,4))
+    print('ys',np.round(s,4))
+    #l,pred = gp_reg(l,s,0.03)
+
+    #print('output',np.round(l,6),np.round(pred,4))
+    print(fit_lam_inv(np.array(l),np.array(s),0.03))
+    print()
+"""
 from random import shuffle
 a = [1,2,3,4,5,6]
 shuffle(a)
@@ -273,6 +285,108 @@ def ncr(n, r):
     return numer // denom  # or / in Python 2
 
 a,b = np.ones((10,10)),np.ones((10,10))*2
-print(np.sum([a,b],axis = 0))
+#print(np.sum([a,b],axis = 0))
+
+import scipy as sp
+n=100
+sp_time = []
+np_time = []
+k=100
+for _ in range(5):
+    a = np.random.uniform(0, 1, (n, n))
+    a += a.T
+    start_np = time.time()
+    np.linalg.eigh(a)
+    np_time.append(time.time()-start_np)
+    start_sp = time.time()
+
+    sp.linalg.eigh(a,eigvals=(n-k,n-1))
+    sp_time.append(time.time()-start_sp)
+
+print(sp_time)
+print(np_time)
+print(np.mean(np_time)/np.mean(sp_time))
+
+n=100
+
+a = np.random.uniform(0, 1, (n, n))
+a += a.T
+d, q = np.linalg.eigh(a)
+md = np.quantile(np.abs(d),q=0.1)
+d2 = np.copy(d)
+d2[np.abs(d)<md]=0
+print(d.shape)
+print('norm of eta * A - S',np.linalg.norm(a))
+a_ = np.dot((q[:,]*d2),q.T)
+print('norm of truncation',np.linalg.norm(a_))
+
+print('norm of diff',np.linalg.norm(a_-a))
+
+#print(np.round(a,2))
+#print(np.round(a_,2))
+
+def Prox_twonorm(A, eta):
+    col_norms = np.linalg.norm(A, axis=0)
+    Z = np.dot(A, np.diag((np.ones(A.shape[0]) - eta / col_norms) * (col_norms > eta)))
+    return Z
+
+z = Prox_twonorm(a,0.1)
+print(z.shape)
+
+def calc_sigma(A,eta):
+    mat = A/eta
+    sigmas = []
+    for col in mat.T:
+        lo,hi = -np.sum(np.abs(col)),np.sum(np.abs(col))
+        lo,hi = min(lo,-1),max(hi,1)
+        while hi-lo>1e-5:
+            mid = (lo+hi)/2
+            s = np.sum(np.maximum(col-mid,0))
+            if s<1:
+                hi = mid
+            else:
+                lo = mid
+        print(np.sum(np.maximum(col-mid,0)))
+        sigmas.append(mid)
+    return sigmas
+
+def calc_sigma2(A,eta):
+    mat = A/eta
+    col_sums = np.sum(mat,axis=0) #sum of all column elts
+    sigma_low,sigma_high = np.minimum(-col_sums,-1),np.maximum(col_sums,1)
+    count = 0
+    while not np.alltrue(sigma_high-sigma_low<1e-5 )and count<50:
+        mid = (sigma_high+sigma_low)/2
+        s = np.sum(np.maximum(mat-mid,0),axis=0)
+        indslow,indshigh = s>=1,s<1
+        sigma_low[indslow]=mid[indslow]
+        sigma_high[indshigh] =mid[indshigh]
+        count+=1
+    return sigma_high
+start = time.time()
+print(np.round(calc_sigma(a,0.1)))
+print(time.time()-start)
+start = time.time()
+print(np.round(calc_sigma2(a,0.1)))
+print(time.time()-start)
+
+a=np.random.uniform(0,1,(10,10))
 
 
+def Prox_infnorm(A, eta):
+    temp = A/eta
+    sigmas = calc_sigma2(temp,eta)
+    temp = np.maximum(np.abs(temp)-sigmas,0)
+    S_sigma = np.sign(A)*temp
+    return A-(eta*S_sigma)
+
+a = a/(np.sum(a,axis=0))
+for i in [1,2,5]:
+    a[:,i]=0
+print(np.round(Prox_infnorm(a,0.9),3))
+
+eta = 0.1
+a=a+a.T
+d, q = np.linalg.eigh(a)
+print(np.linalg.norm(a))
+print(np.linalg.norm(a-np.dot(q*d,q.T)))

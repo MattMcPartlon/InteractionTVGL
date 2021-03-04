@@ -47,7 +47,7 @@ def filter_not_first_or_target(entry, min_sparsity=0, max_sparsity=1, *args, **k
     t2 = filter_target_clust(entry, min_sparsity, max_sparsity)
     return (not t1) and (not t2) and not entry[AVG]
 
-def filter_avg(entry):
+def filter_avg(entry,*args, **kwargs):
     return entry[AVG]
 
 
@@ -129,20 +129,27 @@ msa_root = sys.argv[3]
 save_path = sys.argv[4]
 
 seq_n_msa_info = {}
+
+def split_method(m):
+    method = m.split('.')[0]
+    if len(m.split('.'))>2:
+        method+='.'+m.split('.')[1]
+    return method
+
 for ptn in os.listdir(seq_root):
     nm = ptn.split('.')[0]
     seq = get_seq(os.path.join(seq_root, ptn))
     msa_depth = get_msa_depth(os.path.join(msa_root, nm + '.aln.fasta'))
     seq_n_msa_info[nm] = {'len': len(seq), 'depth': msa_depth, 'meff': meff_data[nm]}
 
-methods = [x.split('.')[0] for x in os.listdir(data_root) if x.endswith('.npy')]
+methods = [split_method(x) for x in os.listdir(data_root) if x.endswith('.npy')]
 methods = [x for x in methods if '_top' not in x]
 print(methods)
 _header = 'method,target,seq len, msa depth, meff, cluster type,s1,s2, min sep, max sep, data type'
 _header = [x.strip() for x in _header.split(',')]
 
 types = ['ALL', 'FIRST', 'TARGET', 'NOT FIRST OR TARGET', 'AVG']
-data_funcs = [precision_data] * 4
+data_funcs = [precision_data] * 5
 filter_funcs = [
     lambda *args, **kwargs: True,
     filter_first_clust,
@@ -156,15 +163,16 @@ data_map = {}
 for final,ty in zip(finals,tys):
     all_data = []
     prs = [1, 2, 5, 10, 25, 50, 100]
+
     if ty == 'TOP_L':
         prs = ['L', 'L/2', 'L/5', 'L/10']
-
     max_seps = {5: 9, 10: 23, 23: None}
     if ty == 'TOP_L':
         max_seps = {5: None, 9: None, 12: None, 24: None}
     header = list(_header)
+    prs = [x for x in prs]
     for pr in prs:
-        header.append(str(pr))
+        header.append(pr)
     for method in methods:
         # get results for the method
         # upper and lower sparsity limits

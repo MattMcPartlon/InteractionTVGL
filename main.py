@@ -78,12 +78,6 @@ parser.add_argument('-i', '--max_iters',
                     help="Maximum number of iterations to run ADMM updates",
                     type=int,
                     default=150)
-parser.add_argument('-s', '--shrink',
-                    help="Condition sample covariance matrices C_shrink = (1-lam)*"
-                         "I+lam*C where lam is chosen "
-                         "to enforce PD of C_shrink (default = False)",
-                    action="store_true",
-                    default=False)
 parser.add_argument('-l', '--lamb',
                     help='Value(s) for lambda parameter to TVGL (controls'
                          ' sparsity of precision matrix - larger =>'
@@ -136,6 +130,28 @@ parser.add_argument('-o', '--cdhit_options',
                     help='options to pass to cdhit '
                          'clustering program', nargs='+', type=str,
                     default='-c 0.8, -G 1 -n 5 -g 0 -aS 0.85 -aL 0'.split(' '))
+parser.add_argument('-m', '--beta_scale',
+                    help='optionally scale beta parameter so that beta[i]=beta*beta_scale**(i)',
+                    type=float,
+                    default=1)
+parser.add_argument('-z', '--beta_ratio',
+                    help='(optional) choose beta as lam[1]*beta_ratio at each step. Only applied'
+                         'if >0',
+                    type=float,
+                    default=0)
+parser.add_argument('-x', '--penalty_ty',
+                    help='penalty type to use for TVGL procedure (L1 = 1,\n L2=2,\n LAPLACIAN=3,\n PERTURBATION=5)',
+                    type=int,
+                    default=1)
+parser.add_argument('-n', '--all_seq_pos',
+                    help='position to place all sequence cluster in opt.',
+                    type=int,
+                    default=0)
+parser.add_argument('-s', '--single_lam',
+                    help='use only one lambda value, shared for all clusters. Lambda is set so that'
+                         'the first matrix has target sparsity --target_sparsity, and others are ignored.',
+                    type=int,
+                    default=0)
 args = parser.parse_args()
 _n_threads = args.max_threads
 if int(_n_threads) > 0:
@@ -147,6 +163,7 @@ if int(_n_threads) > 0:
 
 # have to import after setting number of threads
 import logging
+import sys
 ptn_name = args.target_seq.split('/')[-1].split('.')[0]
 log_file = args.log_file or os.path.join(args.output_dir, f'{ptn_name}_error_log.log')
 log_dir = os.path.dirname(log_file)
@@ -155,9 +172,12 @@ if not os.path.exists(log_dir):
         os.makedirs(log_dir, exist_ok=True)
     except:
         pass
-
-logging.basicConfig(filename=log_file, level=logging.INFO,
-                    format='%(asctime)s %(levelname)s %(name)s %(message)s')
+if args.log_file != '':
+    logging.basicConfig(filename=log_file, level=logging.INFO,
+                        format='%(asctime)s %(levelname)s %(name)s %(message)s')
+else:
+    logging.basicConfig(stream = sys.stdout, level=logging.INFO,
+                        format='%(asctime)s %(levelname)s %(name)s %(message)s')
 logger = logging.getLogger(__name__)
 
 import traceback
@@ -165,18 +185,25 @@ from cluster.cd_hit_cluster import *
 from cluster.phylo_cluster import gen_phylo_clusters
 import TVGL_Interaction
 from TVGL_Interaction import TVGL, PenaltyType
-import sys
 import time
 from utils.utils import *
 import importlib
 import multiprocessing
-from utils.bio_utils import CovarianceMatrix
+from utils.bio_utils import CovarianceMatrix, Alignment
 from cluster.random_cluster import random_partition
 
 
 
 target_sparsity = args.target_sparsity
 penalty = PenaltyType.L1
+if args.penalty_ty == 2:
+    penalty = PenaltyType.L2
+if args.penalty_ty == 3:
+    penalty = PenaltyType.LAPLACIAN
+if args.penalty_ty == 4:
+    penalty = PenaltyType.LINF
+if args.penalty_ty == 5:
+    penalty = PenaltyType.PERTURBATION
 
 # Set the TVGL ADMM parameters
 lamb = args.lamb
@@ -203,6 +230,15 @@ if len(args.beta) > 1:
 else:
     beta = args.beta * (args.n_clusters - 1)
 
+if args.beta_ratio > 0:
+    beta = [lamb[0] * args.beta_ratio] * len(beta)
+
+scale = args.beta_scale
+for i in range(len(beta)):
+    beta[i] = beta[i]*(scale**i)
+
+
+
 # Set up output directories
 os.makedirs(args.output_dir, exist_ok=True)
 if args.phylo_path:
@@ -219,17 +255,20 @@ if args.cluster_path:
 
 else:
     n_to_clust = args.n_clusters - 1 if args.all_seq_clust else args.n_clusters
-    if args.cluster_type == 'cdhit':
-        clusters = gen_cdhit_clusters(args.aln, output_cluster_path='./tmp',
-                                      cd_hit_options=' '.join(args.cdhit_options))
-    elif args.cluster_type == 'phylo':
-        clusters = gen_phylo_clusters(args.aln,
-                                      n_to_clust,
-                                      dist_path=args.dist_path,
-                                      out=args.phylo_path,
-                                      verbose=args.verbose)
-    else:  # random
-        clusters = random_partition(args.aln, n_to_clust)
+    clusters = {}
+    if n_to_clust >0:
+        if args.cluster_type == 'cdhit':
+            clusters = gen_cdhit_clusters(args.aln, output_cluster_path='./tmp',
+                                          cd_hit_options=' '.join(args.cdhit_options))
+        # clusters are sorted by max distance to target sequence
+        elif args.cluster_type == 'phylo':
+            clusters = gen_phylo_clusters(args.aln,
+                                          target_seq,
+                                          k=n_to_clust,
+                                          dist_path=args.dist_path,
+                                          )
+        else:  # random
+            clusters = random_partition(args.aln, n_to_clust)
 
 logger.info("finished clustering of protein sequences...")
 
@@ -241,7 +280,7 @@ n_cpus = multiprocessing.cpu_count()
 n_processors = n_cpus if args.max_processors < 0 else args.max_processors
 n_processors = min(n_processors, n_cpus, args.n_clusters + 1)
 
-all_seqs = [seq for cluster in clusters.values() for seq in cluster]
+all_seqs = parse_seqs(args.aln)
 
 if args.all_seq_clust:
     temp = {0: all_seqs}
@@ -251,11 +290,17 @@ if args.all_seq_clust:
         temp[i + 1] = clust
     clusters = temp
 
+all_seqs = clusters[0]
+clusters[0] = clusters[args.all_seq_pos]
+clusters[args.all_seq_pos]=all_seqs
+shrink = False
+print('n_clusters,',len(clusters))
+print('len(clusters[0]',len(clusters[0]))
 logger.info(f"Beginning generation of covariance"
             f" matrices for clusters 1..{args.n_clusters}")
 szs = [len(c) for c in clusters.values()]
 logger.info(f'final cluster sizes : {szs}', )
-cov_mats = [CovarianceMatrix(c, pseudoc=1, shrink=args.shrink)
+cov_mats = [CovarianceMatrix(c, pseudoc=1, shrink=shrink)
             for c in clusters.values()]
 logger.info(f"finished generation of covariance matrices for clusters")
 
@@ -263,11 +308,19 @@ prev_lambs, prev_betas = [], []
 stop = False
 MAX_TRIES = args.max_trial_runs
 prev_sparsities = []
-rfacts = [0] * len(clusters)
-target_sparsity += 0.002  # add tol bc final run produces more sparse output
-best_lam, best_diff = lamb, 1
-best_g_diff = 1
-idxs = np.array([0])
+target_sparsity += 0.001  # add tol bc final run produces more sparse output
+best_lam, best_beta, best_diff = lamb, beta, 1
+idxs = np.arange(len(clusters)).astype(int)
+if args.single_lam == 1:
+    idxs = np.array([args.all_seq_pos])
+#sc = 0.7
+#ws = np.array([sc**i for i in range(len(lamb))])
+ws = [Alignment(c).wt for c in clusters.values()]
+ws /= np.sum(ws)
+ws/=np.min(ws)
+tol = 1.5*1e-3
+
+logger.info(f'using ws : {ws}')
 try:
     for i in range(MAX_TRIES):
         importlib.reload(TVGL_Interaction)
@@ -278,27 +331,22 @@ try:
         assert os.path.exists(os.path.dirname(sp))
         params_converged = False
         if len(prev_sparsities) > 0:
-            prs = np.array(np.array(prev_sparsities[-1])[idxs])
+            prs = np.array(np.array(prev_sparsities[-1]))
             sparsity_diff = np.array(np.abs(prs - target_sparsity)[idxs])
-            params_converged = np.alltrue(sparsity_diff < 0.003)
+            params_converged = np.alltrue(sparsity_diff < tol)
             # lam_diff = np.array(lamb)-np.array(prev_lambs[-1])
             # params_converged = params_converged or np.alltrue(np.abs(lam_diff)<1e-5)
             if np.max(sparsity_diff)<best_diff:
-                if np.min(prs)>min(0.025,target_sparsity):
-                    best_diff = np.max(sparsity_diff)
-                    best_lam = list(prev_lambs[-1])
-            if np.max(sparsity_diff)<0.005:
-                if np.alltrue(prs>=target_sparsity-0.002):
-                    if best_g_diff>np.max(sparsity_diff):
-                        best_lam = list(prev_lambs[-1])
-                        best_g_diff = np.max(sparsity_diff)
-                        best_diff = 0 #take this lambda as best by default
+                best_diff = np.max(sparsity_diff)
+                best_lam = list(prev_lambs[-1])
+                best_beta = list(prev_betas[-1])
         if params_converged or i == MAX_TRIES - 1:
             theta_set = TVGL(np.copy(cov_mats),
                              n_processors=n_processors,
                              lamb=best_lam,
-                             beta=beta,
+                             beta=best_beta,
                              indexOfPenalty=penalty,
+                             w=ws,
                              max_iters=120,
                              verbose=True)
             stop = True
@@ -308,8 +356,9 @@ try:
                              n_processors=n_processors,
                              lamb=lamb,
                              beta=beta,
-                             max_iters=args.max_iters,
                              indexOfPenalty=penalty,
+                             w=ws,
+                             max_iters=args.max_iters,
                              verbose=True)
         logger.info(f'finished generating precision matrices.'
                     f' time : {(time.time() - start)} s')
@@ -320,12 +369,20 @@ try:
                                       prev_lambs,
                                       prev_betas,
                                       target_sparsity=target_sparsity,
-                                      thresh=args.prec_thresh)
+                                      thresh=args.prec_thresh,
+                                      single_lam = args.single_lam == 1,
+                                      idx = args.all_seq_pos,
+                                      )
 
         prev_lambs.append(list(lamb))
         prev_betas.append(list(beta))
         prev_sparsities.append(list(s))
         lamb, beta = list(l), list(b)
+        if args.beta_ratio>0:
+            beta = [lamb[0]*args.beta_ratio]*len(beta)
+        scale = args.beta_scale
+        for i in range(len(beta)):
+            beta[i] = beta[i] * (scale ** i)
         logger.info(f"previous lambs : {prev_lambs}")
         logger.info(f"previous betas : {prev_betas}")
         logger.info(f"sparsities : {prev_sparsities}")
@@ -347,10 +404,11 @@ try:
 
         if stop:
             break
-    time.sleep(120)
 except Exception as e:
     print('caught exception :', e)
     tb = traceback.format_exc()
     logger.error(e)
     logger.error(tb)
+    #flush the loggers buffer before exiting
+    logger.handlers[0].flush()
     raise e

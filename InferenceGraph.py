@@ -67,7 +67,7 @@ clib = ctypes.cdll.LoadLibrary("libc.so.6")
 #   Starting index of the corresponding z-value in edge_z_vals. Then for u.
 (X_NID, X_OBJ, X_VARS, X_CON, X_IND, X_LEN, X_DEG, X_NEIGHBORS) = list(range(8))
 # ADMM Global Variables and Functions
-
+node_weights = None
 # By default, the objective function is Minimize().
 __default_m_func = Minimize
 m_func = __default_m_func
@@ -236,13 +236,13 @@ class TGraphVX(TUNGraph):
     # Option to use serial version or distributed ADMM.
     # maxIters optional parameter: Maximum iterations for distributed ADMM.
     def Solve(self, M=Minimize, UseADMM=True, NumProcessors=0, Rho=1.0,
-              MaxIters=80, EpsAbs=0.01, EpsRel=0.01, Verbose=False):
+              MaxIters=80, EpsAbs=0.01, EpsRel=0.01, Verbose=False, _node_weights = None):
         global m_func
         # Use ADMM if the appropriate parameter is specified and if there
         # are edges in the graph.
         if UseADMM and self.GetEdges() != 0:
             self.__SolveADMM(NumProcessors, Rho, MaxIters, EpsAbs, EpsRel,
-                             Verbose)
+                             Verbose, _node_weights=_node_weights)
             return
         if Verbose:
             logger.info('Serial ADMM')
@@ -392,11 +392,12 @@ class TGraphVX(TUNGraph):
                                                            supergraph.GetNodeValue(snid, superVarName[1])))
 
     def __SolveADMM(self, num_processors, rho_param, maxIters, eps_abs, eps_rel,
-                    verbose):
+                    verbose, _node_weights = None):
         global node_vals, edge_z_vals, edge_u_vals, rho, node_list, edge_list
         global getValue, rho_update_func, writeValue
         global shr_node_vals, shr_edge_u_vals, shr_edge_z_vals
         global rc_tups_row_sorted, rc_tups_col_sorted, z_old_shr
+        global node_weights
         rho = 1.0
         logger.info('in __SolveADMM')
         logger.info(f'Distributed ADMM {num_processors}')
@@ -529,7 +530,7 @@ class TGraphVX(TUNGraph):
         # Create final node_list structure by adding on information for
         # node neighbors
         node_list = []
-        logger.debug('in __SolveADMM (3)')
+        logger.debug('Building node list)')
         for nid, info in node_info.items():
             entry = [nid, info[X_OBJ], info[X_VARS], info[X_CON], info[X_IND],
                      info[X_LEN], info[X_DEG]]
@@ -548,6 +549,7 @@ class TGraphVX(TUNGraph):
         writeValue(z_old_shr, 0, getValue(edge_z_vals, 0, z_length),
                    z_length)
         num_iterations = 0
+        node_weights = multiprocessing.Array('d', [x for x in _node_weights], lock=lock)
 
         # Proceed until convergence criteria are achieved or the maximum
         # number of iterations has passed
@@ -938,9 +940,11 @@ class TGraphVX(TUNGraph):
 # Proximal operators
 def Prox_logdet(S, A, eta):
     d, q = numpy.linalg.eigh(eta * A - S)
-    X_var = (1 / (2 * eta)) * q * (numpy.diag(d + numpy.sqrt(numpy.square(d) + (4 * eta)))) * q.T
-    x_var = X_var[numpy.triu_indices(S.shape[1])]  # extract upper triangular part as update variable
-    return x_var
+    q = numpy.array(q)
+    q1 = ((1 / (2 * eta)) * q)*(d+numpy.sqrt(numpy.square(d) + (4*eta)))
+    # extract upper triangular part as update variable
+    #xv = np.dot((1 / (2 * eta)) * q, (numpy.diag(d + numpy.sqrt(numpy.square(d) + (4 * eta) * numpy.ones(d.shape)))), q.T)
+    return numpy.dot(q1, q.T)[numpy.triu_indices(S.shape[1])]
 
 
 def Prox_lasso(a_ij, a_ji, eta, NID_diff):
@@ -950,16 +954,17 @@ def Prox_lasso(a_ij, a_ji, eta, NID_diff):
     k = 0
     ind = numpy.arange(a_ij.shape[0])
     n = int((-1 + numpy.sqrt(1 + 8 * a_ij.shape[0])) / 2)
-    to_remove = []
-    for i in range(n, 0, -1):
-        to_remove.append(k)
-        k = k + i
-    ind[to_remove] = -1
-    ind = ind[ind > 0]
+    mask = numpy.zeros((n,n))
+    mask[numpy.triu_indices(n,21)]=1
+    ind = mask[numpy.triu_indices(n)]
+    #for i in range(n, 0, -1):
+    #    ind[k] = -1
+    #    k = k + i
+    #ind = ind[ind > 0]
     if NID_diff > 1:
-        z_ij[ind] = Prox_onenorm(a_ij[ind], eta)
+        z_ij[ind>0] = Prox_onenorm(a_ij[ind>0], eta)
     else:
-        z_ji[ind] = Prox_onenorm(a_ji[ind], eta)
+        z_ji[ind>0] = Prox_onenorm(a_ji[ind>0], eta)
 
     return z_ij.T, z_ji.T
 
@@ -974,7 +979,26 @@ def Prox_onenorm(A, eta):
 
 
 def Prox_infnorm(A, eta):
-    raise Exception('unimplemented!')
+    temp = A/eta
+    sigmas = calc_sigma2(temp)
+    temp = numpy.maximum(numpy.abs(temp)-sigmas,0)
+    S_sigma = numpy.sign(A)*temp
+    return A-(eta*S_sigma)
+
+
+def calc_sigma2(mat):
+    col_sums = numpy.sum(mat,axis=0) #sum of all column elts
+    sigma_low,sigma_high = numpy.minimum(-col_sums,-1),numpy.maximum(col_sums,1)
+    count = 0
+    while not numpy.alltrue(sigma_high-sigma_low<1e-5 ) and count<100:
+        mid = (sigma_high+sigma_low)/2
+        s = numpy.sum(numpy.maximum(mat-mid,0),axis=0)
+        indslow,indshigh = s>=1,s<1
+        sigma_low[indslow]=mid[indslow]
+        sigma_high[indshigh] =mid[indshigh]
+        count+=1
+    return sigma_high
+
 
 
 def Prox_twonorm(A, eta):
@@ -1044,7 +1068,7 @@ def Prox_node_penalty(A_ij, A_ji, beta, MaxIter, eps):
 
         deltaU1 = ((V + W) - (theta_1 - theta_2))
         deltaU2 = (V - W.T)
-        if numpy.linalg.norm(deltaU1, 'fro') < eps and numpy.linalg.norm(deltaU1, 'fro') < eps:
+        if numpy.linalg.norm(deltaU1, 'fro') < eps and numpy.linalg.norm(deltaU2, 'fro') < eps:
             break
         U1 = U1 + deltaU1
         U2 = U2 + deltaU2
@@ -1065,13 +1089,18 @@ def ADMM_x(entry):
     global node_vals, edge_z_vals, edge_u_vals
     global rho
     global shr_edge_z_vals, shr_edge_u_vals, shr_node_vals
+    global node_weights
     variables = entry[X_VARS]
     # -----------------------Proximal operator ---------------------------
+    logger.info('in admm x')
     if len(entry[1].args) > 1:
         cvxpyMat = entry[1].args[1].args[0].args[0]
         numpymat = cvxpyMat.value
-        n_t = 1  # Assume number of samples is 1 at each node, need to be alterned alter
+        n_t = node_weights[entry[X_NID]] # Assume number of samples is 1 at each node, need to be altered alter
+        logger.info(f' in admmx : using weight n_t : {n_t} for node {entry[X_NID]}')
         # Iterate through all neighbors of the node
+        #node id's should be 0...n_clusters-1 here
+        #n_t should be set using weights passed to admm
         mat_shape = (int(numpymat.shape[1] * (numpymat.shape[1] + 1) / 2.0),)
         a = numpy.zeros(mat_shape)
         for i in range(entry[X_DEG]):  # entry[X_DEG] = 3 if the node is neither first and the last one
@@ -1105,51 +1134,53 @@ def ADMM_z(entry):
     # 1: L1-norm, 2: L2-norm, 3: Laplacian, 4: L-inf norm, 5: Perturbed-node
 
     # -----------------------Proximal operator ---------------------------
-    if TYPE != 2:
-        a_ij = []  #
-        flag = 0
-        variables_i = entry[Z_IVARS]
-        for (varID, varName, var, offset) in variables_i:
-            x_i = getValue(node_vals, entry[Z_XIIND] + offset, var.size[0])
-            u_ij = getValue(edge_u_vals, entry[Z_UIJIND] + offset, var.size[0])
-            if flag == 0:
-                a_ij = (x_i + u_ij)
-                flag = 1
-            else:
-                a_ij += (x_i + u_ij)
-
-        a_ji = []
-        flag = 0
-        variables_j = entry[Z_JVARS]
-        for (varID, varName, var, offset) in variables_j:
-            x_j = getValue(node_vals, entry[Z_XJIND] + offset, var.size[0])
-            u_ji = getValue(edge_u_vals, entry[Z_UJIIND] + offset, var.size[0])
-            if flag == 0:
-                a_ji = (x_j + u_ji)
-                flag = 1
-            else:
-                a_ji += (x_j + u_ji)
-        NID_diff = entry[0][1] - entry[0][0]
-
-        eta = entry[1].args[
-                  0].value / rho  # where entry[1].args[0].value can be alpha or bete depending on NID_diff
-
-        if numpy.abs(NID_diff) <= 1:  # for psi penalty edge
-            #        beta = entry[1].args[0].value
-            [z_ij, z_ji] = Prox_penalty(a_ij, a_ji, eta, TYPE)
+    #if TYPE != 2:
+    a_ij = []  #
+    flag = 0
+    variables_i = entry[Z_IVARS]
+    for (varID, varName, var, offset) in variables_i:
+        x_i = getValue(node_vals, entry[Z_XIIND] + offset, var.size[0])
+        u_ij = getValue(edge_u_vals, entry[Z_UIJIND] + offset, var.size[0])
+        if flag == 0:
+            a_ij = (x_i + u_ij)
+            flag = 1
         else:
-            [z_ij, z_ji] = Prox_lasso(a_ij, a_ji, eta, NID_diff)
+            a_ij += (x_i + u_ij)
 
-        if NID_diff >= -1:
-            writeValue(edge_z_vals, entry[Z_ZIJIND] + variables_i[0][3], z_ij, variables_i[0][2].size[0],
-                       )
-        if NID_diff <= 1:
-            writeValue(edge_z_vals, entry[Z_ZJIIND] + variables_j[0][3], z_ji, variables_j[0][2].size[0],
-                       )
+    a_ji = []
+    flag = 0
+    variables_j = entry[Z_JVARS]
+    for (varID, varName, var, offset) in variables_j:
+        x_j = getValue(node_vals, entry[Z_XJIND] + offset, var.size[0])
+        u_ji = getValue(edge_u_vals, entry[Z_UJIIND] + offset, var.size[0])
+        if flag == 0:
+            a_ji = (x_j + u_ji)
+            flag = 1
+        else:
+            a_ji += (x_j + u_ji)
+    NID_diff = entry[0][1] - entry[0][0]
+
+    eta = entry[1].args[
+              0].value / rho  # where entry[1].args[0].value can be alpha or bete depending on NID_diff
+
+    if numpy.abs(NID_diff) <= 1:  # foProx_penaltyr psi penalty edge
+        #        beta = entry[1].args[0].value
+        [z_ij, z_ji] = Prox_penalty(a_ij, a_ji, eta, TYPE)
+    else:
+        [z_ij, z_ji] = Prox_lasso(a_ij, a_ji, eta, NID_diff)
+
+    if NID_diff >= -1:
+        writeValue(edge_z_vals, entry[Z_ZIJIND] + variables_i[0][3], z_ij, variables_i[0][2].size[0],
+                   )
+    if NID_diff <= 1:
+        writeValue(edge_z_vals, entry[Z_ZJIIND] + variables_j[0][3], z_ji, variables_j[0][2].size[0],
+                   )
     #    -----------------------Proximal operator ---------------------------
     #
     # ----------------------- Use CVXPY  -----------------------------
-    else:
+    #else:
+    #    pass
+        """
         objective = entry[Z_OBJ]
         constraints = entry[Z_CON]
         norms = 0
@@ -1169,17 +1200,17 @@ def ADMM_z(entry):
 
         try:
             problem.solve()
-        except SolverError:
+        except:
             problem.solve(solver=SCS)
         if problem.status in [INFEASIBLE_INACCURATE, UNBOUNDED_INACCURATE]:
             print("ECOS error: using SCS for z update")
-            problem.solve(solver=SCS)
 
         # Write back result of z-update. Must write back for i- and j-node
         writeObjective(edge_z_vals, entry[Z_ZIJIND], objective, variables_i)
         writeObjective(edge_z_vals, entry[Z_ZJIIND], objective, variables_j)
 
     # ----------------------- Use CVXPY  -----------------------------
+    """
 
     return None
 

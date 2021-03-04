@@ -60,13 +60,22 @@ class Sequence:
     def matrix(self):
         return np.array([AA_vec_map[aa] for aa in self.seq]).T
 
+def filter_seqs(seqs, mg = 0.2):
+    tmp = []
+    for s in seqs:
+        n_gaps = sum([1 for aa in s if aa=='-'])
+        if n_gaps/len(s)<mg:
+            tmp.append(s)
+    print('filtered ',len(seqs)-len(tmp),'seqs')
+    return tmp
 
 class Alignment:
     def __init__(self, seqs: List[str], weight_seqs = True):
         check_seqs(seqs)
         self.seqs = [Sequence(seq) for seq in seqs]
-        self.seq_length = len(seqs[0])
-        self.n_seqs = len(seqs)
+        self.seqs = filter_seqs(self.seqs)
+        self.seq_length = len(self.seqs[0])
+        self.n_seqs = len(self.seqs)
         wts = CalcSeqWeight(seqs) if weight_seqs else np.ones(len(seqs))
         for seq, wt in zip(self.seqs, wts):
             seq.set_wt(wt)
@@ -89,7 +98,10 @@ class Alignment:
                 if aa in AA_index_map:
                     aa_index = AA_index_map[aa]
                     freqs[i][aa_index] += self.seqs[k].get_wt()
-        return freqs * (1 / ((21 * pseudoc) + self.wt))
+        freqs *= (1 / ((21 * pseudoc) + self.wt))
+        print('gap distribution (0.2,0.4,0.6,0.8,0.9,1):', np.round(
+            np.quantile(freqs[:, AA_index_map['-']], q=(0.2, 0.4, 0.6, 0.8, 0.9, 1)), 3))
+        return freqs
 
     def aas_per_col(self):
         aas_per_col = defaultdict(lambda: defaultdict(set))

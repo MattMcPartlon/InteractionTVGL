@@ -1,6 +1,7 @@
 import importlib
 from typing import List
 from typing import NamedTuple
+import logging
 
 import numpy as np
 from cvxpy import *
@@ -8,6 +9,7 @@ from cvxpy import *
 import InferenceGraph
 from InferenceGraph import TGraphVX
 
+logger = logging.getLogger(__name__)
 
 class PenaltyType(NamedTuple):
     L1 = 1
@@ -16,41 +18,44 @@ class PenaltyType(NamedTuple):
     LINF = 4
     PERTURBATION = 5
 
+def wrap_list(v, size):
+    if isinstance(v, List) or isinstance(v, np.ndarray):
+        ret = v
+    elif not (isinstance(v,float) or isinstance(v,int)):
+        raise Exception(f'unexpected value for v: {v}')
+    else:
+        ret = np.array([v]*size)
+    if len(ret)!=size:
+        raise Exception(f'got incorrect size {len(v)} for v = {v}, expected size {size}')
+    return np.array(ret)
 
-def print_message(msg, verbose=True):
-    if verbose:
-        print(msg + '\n')
 
 
-def TVGL(emp_cov_mats, n_processors, lamb, beta, indexOfPenalty,
+def TVGL(emp_cov_mats, n_processors, lamb, beta, indexOfPenalty,w,
          max_iters=200, verbose=False, epsAbs=1e-3,
          epsRel=1e-3):
+    # reload inference graph - this is neccesary for multithreading+multiprocessing
+    # used when solving ADMM. If this is not done, the global interpreter state
+    # (which is copied at the time the multiprocessing pool is created) may copy
+    # locks on threads (which for some reason are being held by the main process???)
+    # causing deadlock.
     importlib.reload(InferenceGraph)
     if len(emp_cov_mats) == 0:
         return []
-    if isinstance(lamb, List) or isinstance(lamb, np.ndarray):
-        if len(lamb) != len(emp_cov_mats):
-            print(f'got lam : {lamb}, but {len(emp_cov_mats)} cov mats')
-            assert False
-    else:
-        lamb = [lamb] * len(emp_cov_mats)
-    if isinstance(beta, List) or isinstance(beta, np.ndarray):
-        assert len(beta) == len(emp_cov_mats) - 1
-    else:
-        beta = [beta] * (len(emp_cov_mats) - 1)
+    lamb = wrap_list(lamb, len(emp_cov_mats))
+    beta = wrap_list(beta, len(emp_cov_mats)-1)
+    w = wrap_list(w, len(emp_cov_mats))
 
     gvx = TGraphVX(ty=indexOfPenalty)
     n_obs, size = len(emp_cov_mats), emp_cov_mats[0].shape[0]
-    print('n_obs', n_obs)
-    print('size', size)
-    print((size ** 2) * n_obs)
+    logger.info(f'n_obs : {n_obs}')
+    logger.info(f'size : {size}')
     # Define a graph representation to solve
-    print_message('setting up solver graph...')
+    logger.info('setting up solver graph')
     for i, mat in enumerate(emp_cov_mats):
         _lam = lamb[i]
         theta_i = semidefinite(size, name='theta')
-        # unclear why the L1 component is commented out
-        obj = -log_det(theta_i) + trace(mat * theta_i)  # + alpha*norm(S,1)
+        obj = log_det(theta_i) + trace(mat * theta_i)  # + alpha*norm(S,1)
         gvx.AddNode(i, obj)
         if i > 0:  # Add edge to previous timestamp
             _beta = beta[i - 1]
@@ -61,12 +66,12 @@ def TVGL(emp_cov_mats, n_processors, lamb, beta, indexOfPenalty,
 
         # Add fake nodes, edges
         gvx.AddNode(i + n_obs)
-        gvx.AddEdge(i, i + n_obs, Objective=_lam * norm(theta_i, 1))
-    print_message('finished setting up solver graph... ', verbose)
+        gvx.AddEdge(i, i + n_obs, Objective=_lam*norm(theta_i, 1))
+    logger.info('finished setting up solver graph... ')
     # need to write the parameters of ADMM
-    print_message('solving... ', verbose)
+    logger.info('solving... ')
     gvx.Solve(NumProcessors=n_processors, EpsAbs=epsAbs, EpsRel=epsRel,
-              Verbose=verbose, MaxIters=max_iters)
+              Verbose=verbose, MaxIters=max_iters, _node_weights=w)
 
     # Extract the set of estimated theta
     thetaSet = []

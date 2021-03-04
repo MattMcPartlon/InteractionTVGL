@@ -5,14 +5,20 @@ import time
 
 s,e = int(sys.argv[1]),int(sys.argv[2])
 max_running = e-s+1
-if len(sys.argv)>3:
-    max_running = int(sys.argv[3])
 count = 0
 cmds = []
-with open('args.txt', 'r+') as f:
+f = 'args.txt'
+if len(sys.argv)>3:
+    f = sys.argv[3]
+
+with open(f, 'r+') as f:
     for i,x in enumerate(f):
         count+=1
         cmds.append(x)
+
+max_running = min(max_running,e-s+1)
+e = min(e,count-1)
+
 
 processes = []
 cmds = cmds[s:e+1]
