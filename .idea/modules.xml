@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/InteractionTVGL.iml" filepath="$PROJECT_DIR$/.idea/InteractionTVGL.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../TVGL_copy/.idea/TVGL_copy.iml" filepath="$PROJECT_DIR$/../TVGL_copy/.idea/TVGL_copy.iml" />
       <module fileurl="file://$PROJECT_DIR$/../art/.idea/art.iml" filepath="$PROJECT_DIR$/../art/.idea/art.iml" />
       <module fileurl="file://$PROJECT_DIR$/../hw4/.idea/hw4.iml" filepath="$PROJECT_DIR$/../hw4/.idea/hw4.iml" />
     </modules>

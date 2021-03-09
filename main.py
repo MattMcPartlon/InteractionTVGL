@@ -130,8 +130,8 @@ parser.add_argument('-o', '--cdhit_options',
                     help='options to pass to cdhit '
                          'clustering program', nargs='+', type=str,
                     default='-c 0.8, -G 1 -n 5 -g 0 -aS 0.85 -aL 0'.split(' '))
-parser.add_argument('-m', '--beta_scale',
-                    help='optionally scale beta parameter so that beta[i]=beta*beta_scale**(i)',
+parser.add_argument('-m', '--max_gapf',
+                    help='maximum allowed gap frequency for column in MSA',
                     type=float,
                     default=1)
 parser.add_argument('-z', '--beta_ratio',
@@ -143,8 +143,8 @@ parser.add_argument('-x', '--penalty_ty',
                     help='penalty type to use for TVGL procedure (L1 = 1,\n L2=2,\n LAPLACIAN=3,\n PERTURBATION=5)',
                     type=int,
                     default=1)
-parser.add_argument('-n', '--all_seq_pos',
-                    help='position to place all sequence cluster in opt.',
+parser.add_argument('-n', '--remove_gap_posns',
+                    help='how to handle positions exceeding gap threshold',
                     type=int,
                     default=0)
 parser.add_argument('-s', '--single_lam',
@@ -233,9 +233,7 @@ else:
 if args.beta_ratio > 0:
     beta = [lamb[0] * args.beta_ratio] * len(beta)
 
-scale = args.beta_scale
-for i in range(len(beta)):
-    beta[i] = beta[i]*(scale**i)
+
 
 
 
@@ -290,12 +288,10 @@ if args.all_seq_clust:
         temp[i + 1] = clust
     clusters = temp
 
-all_seqs = clusters[0]
-clusters[0] = clusters[args.all_seq_pos]
-clusters[args.all_seq_pos]=all_seqs
+
 shrink = False
-print('n_clusters,',len(clusters))
-print('len(clusters[0]',len(clusters[0]))
+logger.info(f'n_clusters, {len(clusters)}')
+logger.info(f'len(clusters[0] {len(clusters[0])}')
 logger.info(f"Beginning generation of covariance"
             f" matrices for clusters 1..{args.n_clusters}")
 szs = [len(c) for c in clusters.values()]
@@ -312,10 +308,46 @@ target_sparsity += 0.001  # add tol bc final run produces more sparse output
 best_lam, best_beta, best_diff = lamb, beta, 1
 idxs = np.arange(len(clusters)).astype(int)
 if args.single_lam == 1:
-    idxs = np.array([args.all_seq_pos])
+    idxs = np.array([0])
 #sc = 0.7
 #ws = np.array([sc**i for i in range(len(lamb))])
-ws = [Alignment(c).wt for c in clusters.values()]
+withoutIndices = lambda m, ids: np.delete(np.delete(m, ids, axis=0), ids, axis=1)
+alns = [Alignment(c) for c in clusters.values()]
+gap_fs = [aln.gap_freqs() for aln in alns]
+max_gapf = args.max_gapf
+max_gap_posns = set()
+og_size = len(cov_mats[0])
+remove_posns = args.remove_gap_posns == 1
+for i, fs in enumerate(gap_fs):
+    violations = np.arange(len(fs))[fs > max_gapf]
+    for v in violations:
+        max_gap_posns.add(int(v))
+remove_idxs = []
+for pos in max_gap_posns:
+    temp = pos*21+np.arange(21).astype(int)
+    remove_idxs.extend(list(temp))
+if remove_posns:
+    #remove positions all together
+    for i in range(len(cov_mats)):
+        cov_mats[i]=withoutIndices(cov_mats[i], remove_idxs)
+
+else:
+    for i,fs in enumerate(gap_fs):
+        violations = np.arange(len(fs))[fs>max_gapf]
+        for v in violations:
+            s = 21*v
+            diag = cov_mats[i][s:s + 21, s:s+21]
+            cov_mats[i][s:s+21,:] = 0
+            cov_mats[i][:,s:s + 21] = 0
+            cov_mats[i][s:s + 21, s:s + 21] = diag
+
+#remove these columns from covariance matrices?
+#mask these columns?
+
+logger.info(f'gap posns removed : {remove_idxs}')
+logger.info(f'num gap posns removed : {len(remove_idxs)/21}')
+
+ws = [aln.wt for aln in alns]
 ws /= np.sum(ws)
 ws/=np.min(ws)
 tol = 1.5*1e-3
@@ -371,7 +403,7 @@ try:
                                       target_sparsity=target_sparsity,
                                       thresh=args.prec_thresh,
                                       single_lam = args.single_lam == 1,
-                                      idx = args.all_seq_pos,
+                                      idx = 0,
                                       )
 
         prev_lambs.append(list(lamb))
@@ -380,14 +412,15 @@ try:
         lamb, beta = list(l), list(b)
         if args.beta_ratio>0:
             beta = [lamb[0]*args.beta_ratio]*len(beta)
-        scale = args.beta_scale
-        for i in range(len(beta)):
-            beta[i] = beta[i] * (scale ** i)
         logger.info(f"previous lambs : {prev_lambs}")
         logger.info(f"previous betas : {prev_betas}")
         logger.info(f"sparsities : {prev_sparsities}")
         logger.info(f"current lamb : {lamb}")
         logger.info(f"current beta : {beta}")
+
+        if remove_posns:
+            for i in range(len(theta_set)):
+                theta_set[i] = recover_mat(theta_set[i], og_size, set(remove_idxs))
 
         data = {'theta set': theta_set,
                 'clusters': clusters,

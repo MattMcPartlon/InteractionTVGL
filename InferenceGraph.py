@@ -940,31 +940,35 @@ class TGraphVX(TUNGraph):
 # Proximal operators
 def Prox_logdet(S, A, eta):
     d, q = numpy.linalg.eigh(eta * A - S)
-    q = numpy.array(q)
-    q1 = ((1 / (2 * eta)) * q)*(d+numpy.sqrt(numpy.square(d) + (4*eta)))
-    # extract upper triangular part as update variable
-    #xv = np.dot((1 / (2 * eta)) * q, (numpy.diag(d + numpy.sqrt(numpy.square(d) + (4 * eta) * numpy.ones(d.shape)))), q.T)
-    return numpy.dot(q1, q.T)[numpy.triu_indices(S.shape[1])]
+    X_var = (1 / (2 * eta)) * q * (numpy.diag(d + numpy.sqrt(numpy.square(d) + (4 * eta)))) * q.T
+    return X_var[numpy.triu_indices(S.shape[1])]  # extract upper triangular part as update variable
 
 
 def Prox_lasso(a_ij, a_ji, eta, NID_diff):
     z_ij = numpy.copy(a_ij)
     z_ji = numpy.copy(a_ji)
-
-    k = 0
     ind = numpy.arange(a_ij.shape[0])
+    k = 0
+    to_remove = []
     n = int((-1 + numpy.sqrt(1 + 8 * a_ij.shape[0])) / 2)
-    mask = numpy.zeros((n,n))
-    mask[numpy.triu_indices(n,21)]=1
-    ind = mask[numpy.triu_indices(n)]
+    for i in range(n, 0, -1):
+        to_remove.append(k)
+        k = k + i
+    ind[to_remove] = -1
+    ind = ind[ind > 0]
+    #n = int((-1 + numpy.sqrt(1 + 8 * a_ij.shape[0])) / 2)
+    #a = numpy.zeros((n,n))
+    #a[numpy.triu_indices(n, 21)]=1
+    #ind = a[numpy.triu_indices(n)].ravel()>0
+
     #for i in range(n, 0, -1):
     #    ind[k] = -1
     #    k = k + i
     #ind = ind[ind > 0]
     if NID_diff > 1:
-        z_ij[ind>0] = Prox_onenorm(a_ij[ind>0], eta)
+        z_ij[ind] = Prox_onenorm(a_ij[ind], eta)
     else:
-        z_ji[ind>0] = Prox_onenorm(a_ji[ind>0], eta)
+        z_ji[ind] = Prox_onenorm(a_ji[ind], eta)
 
     return z_ij.T, z_ji.T
 

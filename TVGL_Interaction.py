@@ -55,7 +55,7 @@ def TVGL(emp_cov_mats, n_processors, lamb, beta, indexOfPenalty,w,
     for i, mat in enumerate(emp_cov_mats):
         _lam = lamb[i]
         theta_i = semidefinite(size, name='theta')
-        obj = log_det(theta_i) + trace(mat * theta_i)  # + alpha*norm(S,1)
+        obj = -log_det(theta_i) + trace(mat * theta_i)  # + alpha*norm(S,1)
         gvx.AddNode(i, obj)
         if i > 0:  # Add edge to previous timestamp
             _beta = beta[i - 1]
@@ -66,7 +66,7 @@ def TVGL(emp_cov_mats, n_processors, lamb, beta, indexOfPenalty,w,
 
         # Add fake nodes, edges
         gvx.AddNode(i + n_obs)
-        gvx.AddEdge(i, i + n_obs, Objective=_lam*norm(theta_i, 1))
+        gvx.AddEdge(i, i + n_obs, Objective=_lam * norm(theta_i, 1))
     logger.info('finished setting up solver graph... ')
     # need to write the parameters of ADMM
     logger.info('solving... ')

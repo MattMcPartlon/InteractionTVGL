@@ -131,10 +131,8 @@ save_path = sys.argv[4]
 seq_n_msa_info = {}
 
 def split_method(m):
-    method = m.split('.')[0]
-    if len(m.split('.'))>2:
-        method+='.'+m.split('.')[1]
-    return method
+    return '.'.join(m.split('.')[:len(m.split('.'))-1])
+
 
 for ptn in os.listdir(seq_root):
     nm = ptn.split('.')[0]

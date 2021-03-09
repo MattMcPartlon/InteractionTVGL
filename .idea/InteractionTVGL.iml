@@ -6,5 +6,6 @@
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="module" module-name="art" />
     <orderEntry type="module" module-name="hw4" />
+    <orderEntry type="module" module-name="TVGL_copy" />
   </component>
 </module>

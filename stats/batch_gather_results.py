@@ -72,8 +72,8 @@ def process_precision_result(idx, results_root, ground_truth_root, seq_root, sp_
         precision_mats=precision_mats.reshape((-1,precision_mats.shape[0],precision_mats.shape[1]))
     if precision_mats[0] is None:
         return
-    wts = np.ones(len(precision_mats))/len(precision_mats)
     l = len(precision_mats)
+    sizes = [1]
     if 'clusters' in predicted_data:
         sizes = []
         clusters = predicted_data['clusters']
@@ -184,7 +184,7 @@ def process_results_root(results_root, ground_truth_root, seq_root, save_f, sp =
 Process results - for each data file, we write the precision information
 of contact prediction obtained from the sample precision matrix.
 """
-CUTOFF = 15
+CUTOFF = 1
 if __name__ == '__main__':
     data_root = sys.argv[1]  # pred
     ground_truth = sys.argv[2]
@@ -199,7 +199,7 @@ if __name__ == '__main__':
 
     for data in os.listdir(data_root):
         #REMOVE LATER:
-        if not ('penalty' in data or 'psicov' in data):
+        if not ('remove_gaps' in data or 'psicov' in data):
             continue
 
         print('processing :', data)

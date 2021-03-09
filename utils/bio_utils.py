@@ -32,7 +32,7 @@ class Sequence:
         sequence = sequence.replace('B', 'N')
         sequence = sequence.replace('Z', 'E')
         sequence = sequence.replace('X', '-')
-        sequence = sequence.replace('U', '-')
+        sequence = sequence.replace('U', 'C')
         self.seq = sequence
         self.wt = None
 
@@ -60,13 +60,21 @@ class Sequence:
     def matrix(self):
         return np.array([AA_vec_map[aa] for aa in self.seq]).T
 
-def filter_seqs(seqs, mg = 0.2):
+def filter_seqs(seqs, mg = 0.45, frac = 0.95):
     tmp = []
+    gaps = []
+    L = len(seqs[0])
     for s in seqs:
-        n_gaps = sum([1 for aa in s if aa=='-'])
-        if n_gaps/len(s)<mg:
-            tmp.append(s)
-    print('filtered ',len(seqs)-len(tmp),'seqs')
+        gaps.append(sum([1 for aa in s if aa=='-'])/L)
+
+    gaps = np.round(gaps,3)
+    q = (0, 0.2, 0.4, 0.6, 0.8, 0.9, 1)
+    logger.info(f'gap frequency {q}, {np.quantile(gaps,q=q)}')
+    gap_indxs = np.argsort(gaps)
+    for idx in gap_indxs:
+        if gaps[idx]<mg or (idx/L)<frac:
+            tmp.append(seqs[idx])
+    logger.info(f'filtered {len(seqs)-len(tmp)} of {len(seqs)} seqs')
     return tmp
 
 class Alignment:
@@ -80,6 +88,10 @@ class Alignment:
         for seq, wt in zip(self.seqs, wts):
             seq.set_wt(wt)
         self.wt = np.sum(wts)
+
+    def gap_freqs(self, pseudoc = 1):
+        fs = self.empirical_freqs_single(pseudoc)
+        return fs[:, AA_index_map["-"]]
 
     def empirical_freqs_single(self, pseudoc):
         """Counts the frequency of each aa at each column in the alignment
@@ -99,8 +111,7 @@ class Alignment:
                     aa_index = AA_index_map[aa]
                     freqs[i][aa_index] += self.seqs[k].get_wt()
         freqs *= (1 / ((21 * pseudoc) + self.wt))
-        print('gap distribution (0.2,0.4,0.6,0.8,0.9,1):', np.round(
-            np.quantile(freqs[:, AA_index_map['-']], q=(0.2, 0.4, 0.6, 0.8, 0.9, 1)), 3))
+        logger.info(f'gap distribution (0.2,0.4,0.6,0.8,0.9,1): {np.round(np.quantile(freqs[:, AA_index_map["-"]], q=(0.2, 0.4, 0.6, 0.8, 0.9, 1)), 3)}')
         return freqs
 
     def aas_per_col(self):

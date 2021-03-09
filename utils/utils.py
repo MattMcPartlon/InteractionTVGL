@@ -4,6 +4,27 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 import logging
 logger = logging.getLogger(__name__)
 import warnings
+
+withoutIndices = lambda m, ids: np.delete(np.delete(m, ids, axis=0), ids, axis=1)
+
+def recover_mat(mat, size, removed_posns):
+    new_mat = np.zeros((size, size))
+    mat_i = -1
+    for i in range(size):
+        if i in removed_posns:
+            continue
+        else:
+            mat_i +=1
+        mat_j = -1
+        for j in range(size):
+            if j in removed_posns:
+                continue
+            else:
+                mat_j+=1
+                new_mat[i,j] = mat[mat_i,mat_j]
+    return new_mat
+
+
 def parse_sequence(seq_path):
     if not os.path.exists(seq_path):
         logger.error(f'path to sequence {seq_path} does not exist!')
